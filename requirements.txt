@@ -1,0 +1,13 @@
+numpy==1.26.4
+opencv-python==4.9.0.80
+opencv-contrib-python==4.9.0.80
+paddlepaddle==2.6.1
+paddleocr==2.7.0
+paddlex==2.5.0
+pillow>=10.4.0
+pandas>=2.2.2
+openpyxl>=3.1.5
+rapidfuzz>=3.9.4
+pyautogui>=0.9.54
+mss==9.0.1
+ttkbootstrap==1.14.2

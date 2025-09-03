@@ -1,0 +1,14 @@
+{
+    "headers": [
+        "Date",
+        "Teams",
+        "First Half Score",
+        "Full Time Score",
+        "Match Result 1",
+        "Match Result X",
+        "Match Result 2",
+        "1st Half Result 1",
+        "1st Half Result X",
+        "1st Half Result 2"
+    ]
+}
