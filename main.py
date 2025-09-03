@@ -16,7 +16,7 @@ from ttkbootstrap.icons import Icon
 class NesineOddsApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("⚡ Nesine Odds Extractor")
+        self.root.title("NESINE Odds Scraper")
         self.root.geometry("1000x700")
         self.root.minsize(800, 600)
 
@@ -41,13 +41,13 @@ class NesineOddsApp:
         frame_top.grid(row=0, column=0, sticky="nsew")
 
         self.label_image = ttk.Label(frame_top, text="ROI Preview", anchor="center")
-        self.label_image.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        self.label_image.grid(row=0, column=0, sticky="nsew", padx=5, pady=7)
 
         frame_controls = ttk.Frame(frame_top)
-        frame_controls.grid(row=0, column=1, sticky="ns", padx=5, pady=5)
+        frame_controls.grid(row=0, column=1, sticky="ns", padx=5, pady=7)
 
         # Control buttons stacked vertically
-        self.btn_select_roi = ttk.Button(frame_controls, text="Select ROI", command=self.select_roi)
+        self.btn_select_roi = ttk.Button(frame_controls, text="SELECT ROI", command=self.select_roi)
         self.btn_select_roi.pack(fill="x", pady=3)
 
         self.btn_start = ttk.Button(frame_controls, text="START", command=self.start_stream)
@@ -74,7 +74,7 @@ class NesineOddsApp:
 
         # Row 1 (30% height) → Results table
         frame_bottom = ttk.Frame(root)
-        frame_bottom.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        frame_bottom.grid(row=1, column=0, sticky="nsew", padx=5, pady=7)
 
         self.tree = ttk.Treeview(frame_bottom, columns=("1", "X", "2"), show="headings")
         self.tree.heading("1", text="1")
@@ -115,7 +115,7 @@ class NesineOddsApp:
             nonlocal start_x, start_y, rect_id
             start_x, start_y = event.x, event.y
             rect_id = canvas.create_rectangle(start_x, start_y, start_x, start_y,
-                                              outline="red", width=2)
+                                              outline="red", width=3)
 
         def on_mouse_drag(event):
             nonlocal rect_id
