@@ -30,39 +30,29 @@ _, thresh = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY_INV)
 
 _, thresh = cv2.threshold(thresh, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-thresh[-1, :] = 255
-
 cv2.imshow("thresh", thresh)
 
 # Create horizontal kernel for detecting horizontal lines/structures
-horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (50, 1))
+horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (80, 1))
 
 # Apply morphological operations to detect horizontal structures
 horizontal_lines = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, horizontal_kernel)
+
+# block_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (500, 50))
+# blocks = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, block_kernel)
 
 # Find contours of horizontal structures
 contours, _ = cv2.findContours(horizontal_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
 # Filter and sort contours by area and position
 row_boxes = []
-line_positions = []
 min_area = 1000  # Minimum area threshold for valid rows
 
 row_count = 0
 height, width = orig.shape[:2]
 for cnt in contours:
-    x, y, w, h = cv2.boundingRect(cnt)  # bounding box of the line
-    line_top = y
-    line_bottom = y + h
-    line_center = y + h // 2
-    line_positions.append((line_top, line_bottom, line_center))
-    # Sort by vertical position
-    line_positions = sorted(line_positions, key=lambda x: x[0])
-    cv2.line(orig, (0, line_top), (orig.shape[1], line_top), (0, 0, 255), 1)  # red line
-    cv2.line(orig, (0, line_bottom), (orig.shape[1], line_bottom), (0, 0, 255), 1)  # red line
-
     area = cv2.contourArea(cnt)
-    if area > 1000:  # filter small noise
+    if area < 2000:  # filter small noise
         continue
 
     # Get bounding box
