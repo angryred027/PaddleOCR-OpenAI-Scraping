@@ -14,6 +14,7 @@ from PIL import Image, ImageTk
 import mss
 import queue
 import test
+import extract_text
 
 class NESINEOddsScraperUI:
     def __init__(self, root):
@@ -474,7 +475,7 @@ class NESINEOddsScraperUI:
     def select_logo(self):
         """Handle Select Logo button click"""
         self.logo_coordinates = self.create_roi_selector("Select Logo Region")
-        if self.logo_coordinates:
+        if self.logo_coordinates and self.logo_coordinates['width'] != 0 and self.logo_coordinates['height'] != 0:
             self.roi_count += 1
             
             coords = self.logo_coordinates
@@ -505,9 +506,34 @@ class NESINEOddsScraperUI:
     def select_team_roi(self):
         """Handle Team ROI button click"""
         self.team_coordinates = self.create_roi_selector("Select Team Region")
-        if self.team_coordinates:
-            self.roi_count += 1
-            self.update_config_status()
+        self.extract_team_names()
+        self.roi_count += 1
+        self.update_config_status()
+        
+    def extract_team_names(self):
+        if self.team_coordinates  and self.team_coordinates['width'] != 0 and self.team_coordinates['height'] != 0:
+            coords = self.team_coordinates
+            self.team_roi_monitor = {
+                "top": int(coords["y1"]),
+                "left": int(coords["x1"]),
+                "width": int(coords["x2"] - coords["x1"]),
+                "height": int(coords["y2"] - coords["y1"])
+            }
+            team_name = ""
+            with mss.mss() as sct:
+                # Capture ROI
+                sct_img = sct.grab(self.team_roi_monitor)
+                
+                # Convert to numpy array and process
+                team_name_image = np.array(sct_img)
+                
+                # Convert BGRA -> RGB
+                self.team_name_image = cv2.cvtColor(team_name_image, cv2.COLOR_BGRA2RGB)
+
+                texts, team_name = extract_text.extract_team_name(self.team_name_image)
+                if team_name and len(texts) == 3:  # check if not empty
+                    self.team_name.set(texts[0] + " vs " + texts[2])
+                else: return
 
     def create_roi_selector(self, title="Select Region"):
         """Create ROI selection overlay with proper red outline"""

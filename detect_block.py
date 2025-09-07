@@ -3,7 +3,7 @@ import numpy as np
 
 
 # Load image
-img = cv2.imread('test0.png')
+img = cv2.imread('test/test2.png')
 orig = img.copy()
 
 logo_roi = cv2.selectROI("Select Logo", orig, fromCenter=False, showCrosshair=True)
