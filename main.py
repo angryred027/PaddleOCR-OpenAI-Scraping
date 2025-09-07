@@ -13,6 +13,7 @@ import time
 from PIL import Image, ImageTk
 import mss
 import queue
+import test
 
 class NESINEOddsScraperUI:
     def __init__(self, root):
@@ -20,8 +21,8 @@ class NESINEOddsScraperUI:
         self.root = root
         self.root.title("NESINE Odds Scraper v1.0")
         # Set window size to about half of 15.1 inch screen width (approx 900-950px wide)
-        self.root.geometry("800x700")
-        self.root.minsize(800, 700)
+        self.root.geometry("1000x700")
+        self.root.minsize(1000, 700)
 
         # Initialize MSS and preview variables
         self.mss_sct = None
@@ -48,7 +49,16 @@ class NESINEOddsScraperUI:
         self.current_scroll_state = "Unknown"
         self.scroll_threshold = 5000  # Fixed scroll sensitivity
         self.scroll_text_id = None
-        threshold = 5000
+        
+        # Block detection thread variables
+        self.block_detection_thread = None
+        self.frame_processed = False
+        self.block_detection_lock = threading.Lock()
+
+        # Logo
+        self.logo = None
+        self.logo_monitor = None
+        self.logo_hist = None
         
         # Apply dark theme
         tb.Style("darkly")
@@ -270,7 +280,7 @@ class NESINEOddsScraperUI:
             self.team_coordinates is not None
         ])
 
-        status_text = f"ROIs: {config_count}/3 configured"
+        status_text = f"ROIs: {config_count}/3 configured."
         color = "green" if config_count == 3 else "orange" if config_count == 2 else "red"
 
         # Update label
@@ -466,7 +476,30 @@ class NESINEOddsScraperUI:
         self.logo_coordinates = self.create_roi_selector("Select Logo Region")
         if self.logo_coordinates:
             self.roi_count += 1
+            
+            coords = self.logo_coordinates
+            self.logo_monitor = {
+                "top": int(coords["y1"]),
+                "left": int(coords["x1"]),
+                "width": int(coords["x2"] - coords["x1"]),
+                "height": int(coords["y2"] - coords["y1"])
+            }
+            with mss.mss() as sct:
+                # Capture ROI
+                sct_img = sct.grab(self.logo_monitor)
+                
+                # Convert to numpy array and process
+                logo = np.array(sct_img)
+                
+                # Convert BGRA -> RGB
+                logo = cv2.cvtColor(logo, cv2.COLOR_BGRA2RGB)
+
+                self.logo_hist = self.calculate_hist(logo)
+
             self.update_config_status()
+            
+            status_text = self.status_text.get()
+            self.status_text.set(status_text + " " + "Logo has selected.")       
         
     def select_team_roi(self):
         """Handle Team ROI button click"""
@@ -861,6 +894,14 @@ class NESINEOddsScraperUI:
             
             print("ROI preview stopped")
 
+    def calculate_hist(self, logo):
+        # Compute histogram of selected logo ROI
+        logo_hsv = cv2.cvtColor(logo, cv2.COLOR_BGR2HSV)
+        logo_hist = cv2.calcHist([logo_hsv], [0, 1], None, [50, 60], [0, 180, 0, 256])
+        logo_hist = cv2.normalize(logo_hist, logo_hist, 0, 1, cv2.NORM_MINMAX)
+
+        return logo_hist
+    
     # ========== Add these new methods before the "Window Management" section ==========
     def detect_scroll_change(self, prev_frame, curr_frame, threshold=5000):
         threshold = self.scroll_value.get()
@@ -913,7 +954,7 @@ class NESINEOddsScraperUI:
                             
                             # Immediate status update (no debouncing for testing)
                             new_status = "Scrolling" if is_scrolling else "Captured"
-                            
+
                             if self.current_scroll_state != new_status:
                                 self.current_scroll_state = new_status
                                 
@@ -922,12 +963,22 @@ class NESINEOddsScraperUI:
                                 
                                 self.root.after(0, lambda s=new_status, c=text_color: 
                                             self.update_scroll_canvas_text(s, c))
+                            
+                            if is_scrolling:
+                                # Reset processed flag when scrolling occurs
+                                self.scroll_processed = False
+
+                            else:
+                                # Trigger block detection once scrolling stops
+                                if  not self.scroll_processed and curr_frame is None:
+                                    self._trigger_block_detection(curr_frame.copy())
+
                         
                         # Store current frame for next comparison
                         self.prev_frame = curr_frame.copy()
                         
                         # Control detection rate (same as your working code - 10 FPS)
-                        time.sleep(0.1)  # 50ms = 20 FPS
+                        time.sleep(0.1)  
                         
                     except Exception as e:
                         time.sleep(0.1)
@@ -936,6 +987,42 @@ class NESINEOddsScraperUI:
             print(f"Scroll detection thread error: {e}")
         finally:
             print("Scroll detection thread stopped")
+
+    def _trigger_block_detection(self, frame):
+        """Trigger block detection in a separate thread (non-blocking)"""
+        with self.block_detection_lock:
+            # Only start a new thread if the previous is done
+            if self.block_detection_thread is None or not self.block_detection_thread.is_alive():
+                self.block_detection_thread = threading.Thread(
+                    target=self._detect_and_update_canvas, args=(frame,), daemon=True
+                )
+                self.block_detection_thread.start()
+
+    def _detect_and_update_canvas(self, frame, logo, logo_hist):
+        """
+        Detect blocks and safely update the preview canvas
+        """
+        try:
+            # Convert MSS BGRA -> BGR
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+
+            # Call block.py function
+            result_img, blocks = block_detect(frame_bgr, logo_template, logo_hist)
+
+            # Convert to Tkinter Image
+            img_rgb = cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(img_rgb)
+            tk_img = ImageTk.PhotoImage(pil_img)
+
+            # Thread-safe canvas update
+            self.root.after(0, lambda: self.update_result_canvas(tk_img))
+            print(f"Detected {len(blocks)} blocks after scrolling stopped")
+
+        except Exception as e:
+            print(f"Block detection error: {e}")
+
+    # def update_result_canvas(result):
+
 
     def start_scroll_detection(self):
         """Start scroll detection in background thread"""
@@ -974,7 +1061,6 @@ class NESINEOddsScraperUI:
             # Reset status
             self.current_scroll_state = "Unknown"
             print("Scroll detection stopped")
-
 
     # ========== Window Management ==========
             
