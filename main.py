@@ -175,7 +175,7 @@ class NESINEOddsScraperUI:
         
         # Placeholder text for detected preview
         self.detected_placeholder = self.detected_canvas.create_text(90, 180,
-                                                                   text="Detected Blocks\nWill Show Here", 
+                                                                   text="Detected Results\nWill Show Here", 
                                                                    fill="gray",
                                                                    font=("Arial", 12),
                                                                    anchor="center")
@@ -231,10 +231,13 @@ class NESINEOddsScraperUI:
         self.datetime_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
         
         # Team name entry - right side
+        style = ttk.Style()
+        style.configure("Normal.TEntry", foreground="white", font=("Arial", 9))
         self.team_entry = ttk.Entry(input_frame,
                                    textvariable=self.team_name,
                                    font=("Arial", 9))
         self.team_entry.pack(side="left", fill="x", expand=True)
+        self.team_entry.configure(style="Normal.TEntry")
         
         # Set placeholder for team name
         self.set_placeholder(self.team_entry, "Team Name")
@@ -247,8 +250,8 @@ class NESINEOddsScraperUI:
         # Spinbox for scroll value (number input with step)
         self.scroll_spinbox = ttk.Spinbox(action_frame, 
                                          from_=1000, 
-                                         to=10000, 
-                                         increment=500,  # Step by 5000
+                                         to=30000, 
+                                         increment=500,  # Step by 500
                                          textvariable=self.scroll_value,
                                          width=10)
         self.scroll_spinbox.pack(side="left", padx=(0, 10))
@@ -506,9 +509,9 @@ class NESINEOddsScraperUI:
     def select_team_roi(self):
         """Handle Team ROI button click"""
         self.team_coordinates = self.create_roi_selector("Select Team Region")
-        self.extract_team_names()
-        self.roi_count += 1
-        self.update_config_status()
+        if self.extract_team_names():
+            self.roi_count += 1
+            self.update_config_status()
         
     def extract_team_names(self):
         if self.team_coordinates  and self.team_coordinates['width'] != 0 and self.team_coordinates['height'] != 0:
@@ -532,8 +535,11 @@ class NESINEOddsScraperUI:
 
                 texts, team_name = extract_text.extract_team_name(self.team_name_image)
                 if team_name and len(texts) == 3:  # check if not empty
+                    # Later, when setting the real team name:
                     self.team_name.set(texts[0] + " vs " + texts[2])
-                else: return
+                    self.team_entry.configure(style="Normal.TEntry") 
+                    return True
+                else: return False
 
     def create_roi_selector(self, title="Select Region"):
         """Create ROI selection overlay with proper red outline"""
@@ -934,11 +940,12 @@ class NESINEOddsScraperUI:
     # ========== Detect the scrolling and trigger capture & detect blocks ==========
     def start_scroll_detection(self):
         """Start scroll detection in background thread"""
+
         if not self.roi_coordinates:
             return
             
-        if not self.scroll_detection_running:
-            return
+        # if not self.scroll_detection_running:
+        #     return
             
         print("Starting scroll detection...")
         self.scroll_detection_running = True
@@ -1152,7 +1159,7 @@ class NESINEOddsScraperUI:
             self.root.after(200, self.root.destroy)
         else:
             # If user cancels, restart preview if ROI was selected
-            if self.roi_coordinates and self.roi_coordinates.w != 0 and self.roi_coordinates.h != 0:
+            if self.roi_coordinates and self.roi_coordinates['width'] != 0 and self.roi_coordinates['height'] != 0:
                 self.root.after(300, lambda: self.start_roi_preview())
                 self.root.after(300, lambda: self.start_scroll_detection())
 
