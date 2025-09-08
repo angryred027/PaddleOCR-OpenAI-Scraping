@@ -13,8 +13,8 @@ import time
 from PIL import Image, ImageTk
 import mss
 import queue
-import test
-import extract_text
+import detect_block
+# import extract_text
 
 class NESINEOddsScraperUI:
     def __init__(self, root):
@@ -509,9 +509,9 @@ class NESINEOddsScraperUI:
     def select_team_roi(self):
         """Handle Team ROI button click"""
         self.team_coordinates = self.create_roi_selector("Select Team Region")
-        if self.extract_team_names():
-            self.roi_count += 1
-            self.update_config_status()
+        # if self.extract_team_names():
+        #     self.roi_count += 1
+        #     self.update_config_status()
         
     def extract_team_names(self):
         if self.team_coordinates  and self.team_coordinates['width'] != 0 and self.team_coordinates['height'] != 0:
@@ -761,11 +761,7 @@ class NESINEOddsScraperUI:
     def add_placeholder_data(self):
         """Add some placeholder data to the table for demonstration"""
         # Sample data to show how the table works
-        sample_data = [
-            ("1", "a3f4b2c1", "1.85 | 2.10 | 3.45", "Match Result"),
-            ("2", "b5d2e8f9", "Over 2.5: 1.75", "Total Goals"),
-            ("3", "c7a9d3e2", "Yes: 2.20 | No: 1.65", "Both Teams Score"),
-        ]
+        sample_data = []
         
         for data in sample_data:
             self.tree.insert("", "end", values=data)
@@ -1060,7 +1056,7 @@ class NESINEOddsScraperUI:
 
             if frame_bgr is not None and self.logo is not None and self.logo_hist is not None:
                 # Call block.py detection (optional, uncomment when ready)
-                result_img, blocks = test.block_detect(frame_bgr, logo, logo_hist)
+                result_img, blocks = detect_block.block_detect(frame_bgr, logo, logo_hist)
 
                 # Pass numpy frame to update (use result_img if you want detection result shown)
                 self.update_result_images(result_img)
