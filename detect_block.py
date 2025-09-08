@@ -1,21 +1,27 @@
 import cv2
 import numpy as np
 
+
 class BlockDetector:
     def __init__(self, min_area=100, logo_hist=None, logo_size=None):
         self.min_area = min_area
         self.logo_hist = logo_hist
         self.logo_size = logo_size  # (h, w)
 
-    def detect_rectangles(self, image_path):
-        image = cv2.imread(image_path)
+    def detect_rectangles(self, image):
+        """
+        Detect rectangles (blocks) from an image.
+        Returns list of rectangles and the original image.
+        """
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
         # Threshold
         _, thresh = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY_INV)
         inverted = cv2.bitwise_not(thresh)
 
-        contours, _ = cv2.findContours(inverted, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(
+            inverted, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
 
         rectangles = []
         for contour in contours:
@@ -30,28 +36,15 @@ class BlockDetector:
         return rectangles, image
 
     def get_top_n(self, rectangles, n=10):
+        """
+        Get top N rectangles sorted by area.
+        """
         return sorted(rectangles, key=lambda x: x['area'], reverse=True)[:n]
 
-    def set_logo_template(self, image):
+    def check_logo_in_block(self, block_image, threshold=0.7):
         """
-        Select a ROI logo template and compute histogram
-        """
-        roi = cv2.selectROI("Select Logo", image, fromCenter=False, showCrosshair=True)
-        x, y, w, h = roi
-        logo_template = image[y:y + h, x:x + w].copy()
-        cv2.destroyWindow("Select Logo")
-
-        # HSV histogram
-        logo_hsv = cv2.cvtColor(logo_template, cv2.COLOR_BGR2HSV)
-        logo_hist = cv2.calcHist([logo_hsv], [0, 1], None, [50, 60], [0, 180, 0, 256])
-        logo_hist = cv2.normalize(logo_hist, logo_hist, 0, 1, cv2.NORM_MINMAX)
-
-        self.logo_hist = logo_hist
-        self.logo_size = (h, w)
-
-    def check_logo_in_block(self, block_image, threshold=0.5):
-        """
-        Check if logo exists in left 30% of block
+        Check if logo exists in left 30% of block.
+        Returns (bool, best_score).
         """
         if self.logo_hist is None or self.logo_size is None:
             return False, 0.0
@@ -70,7 +63,8 @@ class BlockDetector:
                 if window.shape[:2] != (lh, lw):
                     continue
                 win_hsv = cv2.cvtColor(window, cv2.COLOR_BGR2HSV)
-                win_hist = cv2.calcHist([win_hsv], [0, 1], None, [50, 60], [0, 180, 0, 256])
+                win_hist = cv2.calcHist([win_hsv], [0, 1], None,
+                                        [50, 60], [0, 180, 0, 256])
                 win_hist = cv2.normalize(win_hist, win_hist, 0, 1, cv2.NORM_MINMAX)
                 score = cv2.compareHist(self.logo_hist, win_hist, cv2.HISTCMP_CORREL)
                 best_score = max(best_score, score)
@@ -78,9 +72,12 @@ class BlockDetector:
         return best_score > threshold, best_score
 
     def visualize_results(self, image, top_rectangles):
+        """
+        Draw rectangles with red (logo) / green (no logo).
+        """
         result_image = image.copy()
 
-        for i, rect in enumerate(top_rectangles):
+        for rect in top_rectangles:
             x, y, w, h = rect['coordinates']
             block_crop = image[y:y + h, x:x + w]
 
@@ -94,30 +91,7 @@ class BlockDetector:
                 text = f"NoLogo {score:.2f}"
 
             cv2.rectangle(result_image, (x, y), (x + w, y + h), color, 3)
-            cv2.putText(result_image, text, (x, y - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            # cv2.putText(result_image, text, (x, y - 5),
+            #             cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
         return result_image
-
-
-# ================== Usage ==================
-detector = BlockDetector(min_area=20000)
-
-# Step 1: Load image & select logo
-sample_img = cv2.imread("test/test1.png")
-detector.set_logo_template(sample_img)
-
-# Step 2: Detect rectangles
-all_rectangles, original_image = detector.detect_rectangles("test/test1.png")
-
-# Step 3: Get top N by area
-top_10_rectangles = detector.get_top_n(all_rectangles, 10)
-
-# Step 4: Visualize results with logo detection
-result_image = detector.visualize_results(original_image, top_10_rectangles)
-
-# Show
-cv2.imshow('Detected Blocks with Logo Check', result_image)
-cv2.imwrite("detected_with_logo.png", result_image)
-cv2.waitKey(0)
-cv2.destroyAllWindows()

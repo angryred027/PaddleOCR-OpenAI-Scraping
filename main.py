@@ -13,10 +13,8 @@ import time
 from PIL import Image, ImageTk
 import mss
 import queue
-import detect_block
-# import extract_text
-
-class NESINEOddsScraperUI:
+from detect_block import BlockDetector
+class MainUI:
     def __init__(self, root):
         """Initialize the main application window"""
         self.root = root
@@ -496,9 +494,13 @@ class NESINEOddsScraperUI:
                 logo = np.array(sct_img)
                 
                 # Convert BGRA -> RGB
-                self.logo = cv2.cvtColor(logo, cv2.COLOR_BGRA2RGB)
+                self.logo = cv2.cvtColor(logo, cv2.COLOR_BGRA2BGR)
+                h, w = logo.shape[:2]
 
                 self.logo_hist = self.calculate_hist(self.logo)
+
+                # Initialize detector with logo hist & size
+                self.detector = BlockDetector(min_area=20000, logo_hist=self.logo_hist, logo_size=(h, w))
 
             self.update_config_status()
             
@@ -1055,11 +1057,17 @@ class NESINEOddsScraperUI:
             frame_bgr = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
 
             if frame_bgr is not None and self.logo is not None and self.logo_hist is not None:
-                # Call block.py detection (optional, uncomment when ready)
-                result_img, blocks = detect_block.block_detect(frame_bgr, logo, logo_hist)
+                # Detect rectangles
+                all_rectangles, original_image = self.detector.detect_rectangles(frame_bgr)
+
+                # Get top N blocks
+                top_10_rectangles = self.detector.get_top_n(all_rectangles, 10)
+
+                # Visualize
+                result_image = self.detector.visualize_results(original_image, top_10_rectangles)
 
                 # Pass numpy frame to update (use result_img if you want detection result shown)
-                self.update_result_images(result_img)
+                self.update_result_images(result_image)
 
         except Exception as e:
             print(f"Block detection error: {e}")
@@ -1168,7 +1176,7 @@ def main():
     root = tb.Window()
     
     # Create the application instance
-    app = NESINEOddsScraperUI(root)
+    app = MainUI(root)
     
     # Start the main event loop
     try:
