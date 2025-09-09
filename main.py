@@ -22,10 +22,14 @@ class MainUI:
     def __init__(self, root):
         """Initialize the main application window"""
         self.root = root
-        self.root.title("NESINE Odds Scraper v1.0")
+        self.root.title("MAKCOLIK SCRAPER v1.0")
         # Set window size to about half of 15.1 inch screen width (approx 900-950px wide)
         self.root.geometry("1050x700")
         self.root.minsize(1050, 700)
+
+        # ID counter
+        self.current_id = 1
+
         # Queues to keep leftovers across calls
         self.header_queue = deque()
         self.block_queue  = deque()
@@ -477,6 +481,9 @@ class MainUI:
         if self.roi_coordinates and self.roi_coordinates['width'] != 0 and self.roi_coordinates['height'] != 0:
             self.roi_count += 1
             self.update_config_status()
+            self.stop_roi_preview()       
+            # Give old thread time to stop, then start new preview
+            self.root.after(500, lambda: self.start_roi_preview())
         
     def select_logo(self):
         """Handle Select Logo button click"""
@@ -642,11 +649,9 @@ class MainUI:
     def toggle_start(self):
         """Handle Start/Pause/Resume button click with color changes"""
         if not self.is_running:
-            # Start the process - Green button
-            self.stop_roi_preview()         # stop old preview if running
+            # Start the process - Green button    # stop old preview if running
             self.stop_scroll_detection()
             # Give old thread time to stop, then start new preview
-            self.root.after(500, lambda: self.start_roi_preview())
             self.root.after(500, lambda: self.start_scroll_detection())
             self.is_running = True
             self.is_paused = False
@@ -654,6 +659,8 @@ class MainUI:
             self.status_text.set("Status: Running - Scrolling detection...")
             print("Started processing")
             self.extract_team_names()
+            self.current_id = 1
+            self.hash_values = []
         
         elif self.is_running and not self.is_paused:
             # Pause the process - Gray button
@@ -671,6 +678,8 @@ class MainUI:
             self.status_text.set("Status: Running - Scrolling detection...")
             print("Processing resumed")
             self.extract_team_names()
+            self.current_id = 1
+            self.hash_values = []
             
         elif self.is_running and not self.is_paused:
             # Pause the process - Yellow button
@@ -960,40 +969,12 @@ class MainUI:
         """Return stable hash for a string."""
         return hashlib.md5(text.encode('utf-8')).hexdigest()
     
-    def check_processed(self, hash):
-        return self.hash_values.index(hash) != -1
-    
-    def pair_headers_blocks(self, new_headers, new_blocks):
-        # Add new unique headers to queue
-        for h_text, h_data in new_headers:
-            h_key = self.get_hash(h_text)
-            if h_key not in [self.get_hash(ht) for ht, _ in self.header_queue]:
-                self.header_queue.append((h_text, h_data))
-
-         # Add new unique blocks to queue
-        for b_text, b_data in new_blocks:
-            b_key = self.get_hash(b_text)
-            if b_key not in [self.get_hash(bt) for bt, _ in self.block_queue]:
-                self.block_queue.append((b_text, b_data))
-
-        # Pairing
-        pairs = []
-        h_index = 0
-        while h_index < len(self.header_queue):
-            header_text, header_obj = self.header_queue[h_index]
-            paired = False
-            for b_index, (block_text, block_obj) in enumerate(self.block_queue):
-                if block_obj.y > header_obj.y:
-                    # Pair and remove from queues
-                    pairs.append((header_obj, block_obj))
-                    self.header_queue.remove((header_text, header_obj))
-                    self.block_queue.remove((block_text, block_obj))
-                    paired = True
-                    break
-            if not paired:
-                h_index += 1
-
-        return pairs
+    def check_processed(self, hash_value):
+        if hash_value in self.hash_values:
+            return True
+        else:
+            self.hash_values.append(hash_value)
+            return False
     
     def calculate_hist(self, logo):
         # Compute histogram of selected logo ROI
@@ -1137,9 +1118,9 @@ class MainUI:
                 # Schedule UI update on main thread
                 self.root.after(0, lambda: self.update_result_images(result_image))
                   
-                # pairs = self._process_pairing(headers, detected_blocks)
+                self._process_pairing(original_image, headers, detected_blocks)
 
-                # print(pairs)
+                cv2.imwrite("original", original_image)
 
                 
         except Exception as e:
@@ -1147,47 +1128,82 @@ class MainUI:
             import traceback
             traceback.print_exc()  # This will show the full traceback
 
-    def _process_pairing(self, headers, blocks):
-        # Add headers to queue if unique
+    def _process_pairing(self, original_image, headers, blocks):
+
+        def _get_text(region, is_header=False):
+            x, y, w, h = region['coordinates']
+            h_img, w_img = original_image.shape[:2]
+
+            # Adjust crop area based on type
+            if is_header:
+                # Left 50%
+                w = int(w * 0.5)
+            else:
+                # Right 60%
+                x = x + int(w * 0.4)
+                w = int(w * 0.6)
+
+            # Clamp to image boundaries
+            x = max(0, min(x, w_img - 1))
+            y = max(0, min(y, h_img - 1))
+            w = max(1, min(w, w_img - x))
+            h = max(1, min(h, h_img - y))
+
+            crop_image = original_image[y:y+h, x:x+w]
+            if crop_image.size == 0:
+                return "", None
+
+            # crop_image = np.ascontiguousarray(crop_image)  # make sure PaddleOCR likes it
+            try:
+                text = extract_text.extract_block_data(crop_image)
+                hsh = self.get_hash(text)
+                return text, hsh
+            except Exception as e:
+                print(f"ERRRRRRORRRRRRR: {e}")
+                import traceback
+                traceback.print_exc()  # This will show the full traceback
+                cv2.imwrite("error.png", crop_image)
+
+
+
+        current_new_headers = []
+        current_new_blocks = []
+
+        # Filter new headers
         for header in headers:
-            h_text = extract_text.extract_block_data(header)
-            h_hash = self.get_hash(h_text)
+            h_text, h_hash = _get_text(header, True)
             if not self.check_processed(h_hash):
-                self.hash_values.append(h_hash)
-                self.header_queue.append((header, h_text))  # keep text for Treeview
+                header['text'] = h_text
+                current_new_headers.append(header)
 
-        # Add blocks to queue if unique
+        # Filter new blocks
         for block in blocks:
-            b_text = extract_text.extract_block_data(block)
-            b_hash = self.get_hash(b_text)
+            b_text, b_hash = _get_text(block, False)
             if not self.check_processed(b_hash):
-                self.hash_values.append(b_hash)
-                self.block_queue.append((block, b_text))
+                block['text'] = b_text
+                current_new_blocks.append(block)
 
+        if len(current_new_headers) == 0 and len(self.header_queue) == 0:
+            return
+        
         pairs = []
 
-        # Try pairing headers with nearest block below
-        h_index = 0
-        while h_index < len(self.header_queue):
-            header, h_text = self.header_queue[h_index]
-            paired = False
-            for b_index, (block, b_text) in enumerate(self.block_queue):
-                if block.y > header.y:
-                    # ✅ Found a pair
-                    pairs.append((h_text, b_text))
+        # First, pair with headers in queue
+        if len(self.header_queue) >= 1 and len(current_new_blocks) >= 1:
+            header = self.header_queue.popleft()
+            block = current_new_blocks.pop(0)  # take top-most block
+            pairs.append([header, block])
+            print(header['text'], ":", block['text'])
 
-                    # Push into Treeview
-                    self.tree.insert("", "end", values=(h_text, b_text))
+        # Pair remaining headers
+        for header in current_new_headers:
+            if len(current_new_blocks) == 0:
+                self.header_queue.append(header)
+            else:
+                block = current_new_blocks.pop(0)  # take top-most block
+                pairs.append([header, block])
+                print(header['text'], ":", block['text'])
 
-                    # Remove from queues
-                    self.header_queue.pop(h_index)
-                    self.block_queue.pop(b_index)
-                    paired = True
-                    break
-            if not paired:
-                h_index += 1  # move to next header
-
-        return pairs
 
     def update_result_images(self, frame_bgr):
         """Update the detected_canvas with the latest processed frame without freezing UI."""

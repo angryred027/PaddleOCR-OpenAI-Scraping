@@ -112,7 +112,7 @@ class BlockDetector:
             if has_logo:
                 color = (0, 0, 255)  # red if logo detected
                 text = f"Logo {score:.2f}"
-                detected.append(block_crop)
+                detected.append(rect)
             else:
                 color = (0, 255, 0)  # green if no logo
                 text = f"NoLogo {score:.2f}"
