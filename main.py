@@ -545,8 +545,6 @@ class MainUI:
                     if team_name and len(texts) == 3:  # check if not empty
                         # Later, when setting the real team name:
                         self.team_name.set(texts[0] + " vs " + texts[2])
-
-                        print("aaaaaaaa")
                         self.team_entry.configure(style="Normal.TEntry") 
                         return True
                     else: return False
