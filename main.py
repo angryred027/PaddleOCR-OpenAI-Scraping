@@ -24,8 +24,8 @@ class MainUI:
         self.root = root
         self.root.title("NESINE Odds Scraper v1.0")
         # Set window size to about half of 15.1 inch screen width (approx 900-950px wide)
-        self.root.geometry("1000x700")
-        self.root.minsize(1000, 700)
+        self.root.geometry("1050x700")
+        self.root.minsize(1050, 700)
         # Queues to keep leftovers across calls
         self.header_queue = deque()
         self.block_queue  = deque()
@@ -148,18 +148,18 @@ class MainUI:
         original_frame.grid_columnconfigure(0, weight=1)
         
         # Canvas for original preview (phone-like aspect ratio)
-        self.original_canvas = tk.Canvas(original_frame, bg="black", width=180, height=360)
+        self.original_canvas = tk.Canvas(original_frame, bg="black", width=270, height=540)
         self.original_canvas.grid(row=0, column=0, sticky="nsew")
         
         # Create the image item once - this prevents flickering
-        self.original_canvas_image = self.original_canvas.create_image(90, 180, anchor="center")
-        self.scroll_text_id = self.original_canvas.create_text(10, 10, 
+        self.original_canvas_image = self.original_canvas.create_image(135, 200, anchor="center")
+        self.scroll_text_id = self.original_canvas.create_text(0, 0, 
                                                       text="", 
                                                       anchor="nw", 
                                                       fill="yellow",
                                                       font=("Arial", 10, "bold"))
         # Placeholder text for original preview
-        self.original_placeholder = self.original_canvas.create_text(90, 180, 
+        self.original_placeholder = self.original_canvas.create_text(135, 200, 
                                                                    text="ROI Preview\nWill Show Here", 
                                                                    fill="gray", 
                                                                    font=("Arial", 12),
@@ -173,14 +173,14 @@ class MainUI:
         detected_frame.grid_columnconfigure(0, weight=1)
         
         # Canvas for detected preview
-        self.detected_canvas = tk.Canvas(detected_frame, bg="black", width=180, height=360)
+        self.detected_canvas = tk.Canvas(detected_frame, bg="black", width=270, height=540)
         self.detected_canvas.grid(row=0, column=0, sticky="nsew")
         
         # Create the image item once
-        self.detected_canvas_image = self.detected_canvas.create_image(90, 180, anchor="center")
+        self.detected_canvas_image = self.detected_canvas.create_image(135, 200, anchor="center")
         
         # Placeholder text for detected preview
-        self.detected_placeholder = self.detected_canvas.create_text(90, 180,
+        self.detected_placeholder = self.detected_canvas.create_text(135, 200,
                                                                    text="Detected Results\nWill Show Here", 
                                                                    fill="gray",
                                                                    font=("Arial", 12),
@@ -844,8 +844,8 @@ class MainUI:
                         pil_img = Image.fromarray(frame)
                         
                         # Resize to fit canvas (maintain aspect ratio)
-                        canvas_width = 180
-                        canvas_height = 360
+                        canvas_width = 270
+                        canvas_height = 540
                         
                         # Calculate aspect ratio preserving resize
                         img_width, img_height = pil_img.size
@@ -1092,11 +1092,11 @@ class MainUI:
             # Only start a new thread if the previous is done
             if self.block_detection_thread is None or not self.block_detection_thread.is_alive():
                 self.block_detection_thread = threading.Thread(
-                    target=self._detect_and_show_result, args=(frame, self.logo, self.logo_hist), daemon=True
+                    target=self._detect_and_show_result, args=(frame.copy(),), daemon=True
                 )
                 self.block_detection_thread.start()
 
-    def _detect_and_show_result(self, frame, logo, logo_hist):
+    def _detect_and_show_result(self, frame):
         """
         Detect blocks and safely update the preview canvas
         """
@@ -1107,22 +1107,25 @@ class MainUI:
             if frame_bgr is not None and self.logo is not None and self.logo_hist is not None:
                 # Detect rectangles
                 blocks, headers, original_image = self.detector.detect_rectangles(frame_bgr)
-
                 # Get top N blocks
                 top_10_rectangles = self.detector.get_top_n(blocks, 10)
 
                 # Visualize
                 result_image, detected_blocks = self.detector.visualize_results(original_image, top_10_rectangles, headers)
+                # print(self.detector.logo_hist)
 
-                # Pass numpy frame to update (use result_img if you want detection result shown)
-                self.update_result_images(result_image)
+                # Schedule UI update on main thread
+                self.root.after(0, lambda: self.update_result_images(result_image))
                   
-                # pairs = self._process_pairing(headers, detected_blocks)
+                pairs = self._process_pairing(headers, detected_blocks)
 
-                # print(pairs)
+                print(pairs)
 
+                
         except Exception as e:
             print(f"Block detection error: {e}")
+            import traceback
+            traceback.print_exc()  # This will show the full traceback
 
     def _process_pairing(self, headers, blocks):
         # Add headers to queue if unique
@@ -1182,8 +1185,8 @@ class MainUI:
                 pil_image = Image.fromarray(rgb_frame)
 
                 # Resize to fit canvas (maintain aspect ratio)
-                canvas_width = 180
-                canvas_height = 360
+                canvas_width = 270
+                canvas_height = 540
                 
                 # Calculate aspect ratio preserving resize
                 img_width, img_height = pil_image.size

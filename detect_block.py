@@ -54,8 +54,9 @@ class BlockDetector:
                     'center': (x + w // 2, y + h // 2)
                 })
 
-        blocks = sorted(rectangles, key=lambda b: b[1])
-        headers = sorted(headers, key=lambda h: h[1]) 
+        # FIXED: Sort by y-coordinate (position in image)
+        blocks = sorted(rectangles, key=lambda b: b['coordinates'][1])  # Sort by y-coordinate
+        headers = sorted(headers, key=lambda h: h['coordinates'][1])    # Sort by y-coordinate
         
         return blocks, headers, image
 
@@ -120,8 +121,8 @@ class BlockDetector:
             # cv2.putText(result_image, text, (x, y - 5),
             #             cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
-        for rect in headers:
-            x, y, w, h = rect['coordinates']
+        for header in headers:
+            x, y, w, h = header['coordinates']
             cv2.rectangle(result_image, (x, y), (x + w, y + h), (255,0,0), 3)
 
         return result_image, detected
