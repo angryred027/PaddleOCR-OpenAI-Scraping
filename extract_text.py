@@ -14,3 +14,6 @@ def extract_team_name(image):
             texts.append(text)
 
     return texts, team_names
+
+def extract_block_data(block_image):
+    

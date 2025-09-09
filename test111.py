@@ -1,3 +1,4 @@
+
 import cv2
 import numpy as np
 
@@ -11,21 +12,22 @@ class RectangleDetector:
 
     # Threshold & morphological closing to get horizontal lines
         # Binary threshold (inverse for light background)
-        mask = cv2.inRange(image, 220, 230)
-
-        # Apply mask to keep only those regions
-        result = cv2.bitwise_and(image, image, mask=mask)
-
         _, thresh = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY)
 
+        tolerance = 5
+        # Apply mask to keep only those regions
+        lower = np.array([max(0, 225 - tolerance)], dtype=np.uint8)
+        upper = np.array([min(255, 225 + tolerance)], dtype=np.uint8)
 
-        inverted = cv2.bitwise_not(thresh)
+        mask = cv2.inRange(image, lower, upper)
+
+        inverted = cv2.bitwise_not(image)
         # Preprocessing
         blur = cv2.GaussianBlur(thresh, (5, 5), 0)
         # _, thresh = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         cv2.imshow("inverted", blur)
         
-        contours, _ = cv2.findContours(inverted, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         rectangles = []
         for contour in contours:
@@ -65,8 +67,8 @@ class RectangleDetector:
         return result_image
 
 # Usage example
-detector = RectangleDetector(min_area=30000)
-all_rectangles, original_image = detector.detect_rectangles('test/test9.png')
+detector = RectangleDetector(min_area=15000)
+all_rectangles, original_image = detector.detect_rectangles('test/test2.png')
 top_10_rectangles = detector.get_top_n(all_rectangles, 10)
 result_image = detector.visualize_results(original_image, top_10_rectangles)
 
@@ -74,13 +76,3 @@ result_image = detector.visualize_results(original_image, top_10_rectangles)
 cv2.imshow('Top 10 Rectangles by Area', result_image)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
-
-# Export results to CSV
-import csv
-with open('top_rectangles.csv', 'w', newline='') as csvfile:
-    writer = csv.writer(csvfile)
-    writer.writerow(['Rank', 'X', 'Y', 'Width', 'Height', 'Area', 'Center_X', 'Center_Y'])
-    for i, rect in enumerate(top_10_rectangles):
-        x, y, w, h = rect['coordinates']
-        center_x, center_y = rect['center']
-        writer.writerow([i+1, x, y, w, h, rect['area'], center_x, center_y])

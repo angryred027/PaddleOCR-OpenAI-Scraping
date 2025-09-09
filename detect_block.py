@@ -19,11 +19,31 @@ class BlockDetector:
         _, thresh = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY_INV)
         inverted = cv2.bitwise_not(thresh)
 
+        tolerance = 5
+        # Apply mask to keep only those regions
+        lower = np.array([max(0, 225 - tolerance)], dtype=np.uint8)
+        upper = np.array([min(255, 225 + tolerance)], dtype=np.uint8)
+
+        mask = cv2.inRange(image, lower, upper)
+        
         contours, _ = cv2.findContours(
             inverted, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
-
+        contours1, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                
+        headers = []
         rectangles = []
+
+        for contour in contours1:
+            area = cv2.contourArea(contour)
+            if area >= 15000:
+                x, y, w, h = cv2.boundingRect(contour)
+                headers.append({
+                    'coordinates': (x, y, w, h),
+                    'area': area,
+                    'center': (x + w // 2, y + h // 2)
+                })
+                
         for contour in contours:
             area = cv2.contourArea(contour)
             if area >= self.min_area:
@@ -33,7 +53,7 @@ class BlockDetector:
                     'area': area,
                     'center': (x + w // 2, y + h // 2)
                 })
-        return rectangles, image
+        return rectangles, headers, image
 
     def get_top_n(self, rectangles, n=10):
         """
@@ -71,11 +91,12 @@ class BlockDetector:
 
         return best_score > threshold, best_score
 
-    def visualize_results(self, image, top_rectangles):
+    def visualize_results(self, image, top_rectangles, headers):
         """
         Draw rectangles with red (logo) / green (no logo).
         """
         result_image = image.copy()
+        detected = []
 
         for rect in top_rectangles:
             x, y, w, h = rect['coordinates']
@@ -86,6 +107,7 @@ class BlockDetector:
             if has_logo:
                 color = (0, 0, 255)  # red if logo detected
                 text = f"Logo {score:.2f}"
+                detected.append(block_crop)
             else:
                 color = (0, 255, 0)  # green if no logo
                 text = f"NoLogo {score:.2f}"
@@ -94,4 +116,8 @@ class BlockDetector:
             # cv2.putText(result_image, text, (x, y - 5),
             #             cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
-        return result_image
+        for rect in headers:
+            x, y, w, h = rect['coordinates']
+            cv2.rectangle(result_image, (x, y), (x + w, y + h), (255,0,0), 3)
+
+        return result_image, detected

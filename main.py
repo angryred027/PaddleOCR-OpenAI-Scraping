@@ -14,6 +14,8 @@ from PIL import Image, ImageTk
 import mss
 import queue
 from detect_block import BlockDetector
+import extract_text
+
 class MainUI:
     def __init__(self, root):
         """Initialize the main application window"""
@@ -511,9 +513,9 @@ class MainUI:
     def select_team_roi(self):
         """Handle Team ROI button click"""
         self.team_coordinates = self.create_roi_selector("Select Team Region")
-        # if self.extract_team_names():
-        #     self.roi_count += 1
-        #     self.update_config_status()
+        if self.extract_team_names():
+            self.roi_count += 1
+            self.update_config_status()
         
     def extract_team_names(self):
         if self.team_coordinates  and self.team_coordinates['width'] != 0 and self.team_coordinates['height'] != 0:
@@ -1019,6 +1021,7 @@ class MainUI:
                                 # Trigger block detection once scrolling stops
                                 if not self.frame_processed and self.logo is not None and self.logo_hist is not None:
                                     self._trigger_block_detection(curr_frame.copy())
+                                    self.extract_team_names()
                                     self.frame_processed = True
                                 else: 
                                     continue
@@ -1058,16 +1061,20 @@ class MainUI:
 
             if frame_bgr is not None and self.logo is not None and self.logo_hist is not None:
                 # Detect rectangles
-                all_rectangles, original_image = self.detector.detect_rectangles(frame_bgr)
+                all_rectangles, headers, original_image = self.detector.detect_rectangles(frame_bgr)
 
                 # Get top N blocks
                 top_10_rectangles = self.detector.get_top_n(all_rectangles, 10)
 
                 # Visualize
-                result_image = self.detector.visualize_results(original_image, top_10_rectangles)
+                result_image, detected_blocks = self.detector.visualize_results(original_image, top_10_rectangles, headers)
 
                 # Pass numpy frame to update (use result_img if you want detection result shown)
                 self.update_result_images(result_image)
+
+                # for block in detected_blocks:
+                    
+
 
         except Exception as e:
             print(f"Block detection error: {e}")
