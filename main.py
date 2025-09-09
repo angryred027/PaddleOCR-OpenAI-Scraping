@@ -61,6 +61,8 @@ class MainUI:
         self.block_detection_thread = None
         self.frame_processed = False
         self.block_detection_lock = threading.Lock()
+        self.ocr_lock = threading.Lock()  # Add this line
+
 
         # Logo
         self.logo = None
@@ -475,11 +477,6 @@ class MainUI:
         if self.roi_coordinates and self.roi_coordinates['width'] != 0 and self.roi_coordinates['height'] != 0:
             self.roi_count += 1
             self.update_config_status()
-            self.stop_roi_preview()         # stop old preview if running
-            self.stop_scroll_detection()
-            # Give old thread time to stop, then start new preview
-            self.root.after(500, lambda: self.start_roi_preview())
-            self.root.after(500, lambda: self.start_scroll_detection())
         
     def select_logo(self):
         """Handle Select Logo button click"""
@@ -543,13 +540,16 @@ class MainUI:
                 # Convert BGRA -> RGB
                 self.team_name_image = cv2.cvtColor(team_name_image, cv2.COLOR_BGRA2RGB)
 
-                texts, team_name = extract_text.extract_team_name(self.team_name_image)
-                if team_name and len(texts) == 3:  # check if not empty
-                    # Later, when setting the real team name:
-                    self.team_name.set(texts[0] + " vs " + texts[2])
-                    self.team_entry.configure(style="Normal.TEntry") 
-                    return True
-                else: return False
+                with self.ocr_lock:
+                    texts, team_name = extract_text.extract_team_name(self.team_name_image)
+                    if team_name and len(texts) == 3:  # check if not empty
+                        # Later, when setting the real team name:
+                        self.team_name.set(texts[0] + " vs " + texts[2])
+
+                        print("aaaaaaaa")
+                        self.team_entry.configure(style="Normal.TEntry") 
+                        return True
+                    else: return False
 
     def create_roi_selector(self, title="Select Region"):
         """Create ROI selection overlay with proper red outline"""
@@ -645,11 +645,34 @@ class MainUI:
         """Handle Start/Pause/Resume button click with color changes"""
         if not self.is_running:
             # Start the process - Green button
+            self.stop_roi_preview()         # stop old preview if running
+            self.stop_scroll_detection()
+            # Give old thread time to stop, then start new preview
+            self.root.after(500, lambda: self.start_roi_preview())
+            self.root.after(500, lambda: self.start_scroll_detection())
             self.is_running = True
             self.is_paused = False
             self.start_button.configure(text="Pause", style="warning.TButton")  # Yellow for Pause
-            self.status_text.set("Status: Running - Processing blocks...")
+            self.status_text.set("Status: Running - Scrolling detection...")
             print("Started processing")
+            self.extract_team_names()
+        
+        elif self.is_running and not self.is_paused:
+            # Pause the process - Gray button
+            self.stop_scroll_detection()
+            self.is_paused = True
+            self.start_button.configure(text="Resume", style="success.TButton")  # Green for Resume
+            self.status_text.set("Status: Paused - Click Resume to continue...")
+            print("Processing paused")
+        
+        elif self.is_running and self.is_paused:
+            # Resume the process - Yellow button
+            self.start_scroll_detection()
+            self.is_paused = False
+            self.start_button.configure(text="Pause", style="warning.TButton")  # Yellow for Pause
+            self.status_text.set("Status: Running - Scrolling detection...")
+            print("Processing resumed")
+            self.extract_team_names()
             
         elif self.is_running and not self.is_paused:
             # Pause the process - Yellow button
@@ -1066,7 +1089,6 @@ class MainUI:
                                 # Trigger block detection once scrolling stops
                                 if not self.frame_processed and self.logo is not None and self.logo_hist is not None:
                                     self._trigger_block_detection(curr_frame.copy())
-                                    self.extract_team_names()
                                     self.frame_processed = True
                                 else: 
                                     continue
@@ -1117,9 +1139,9 @@ class MainUI:
                 # Schedule UI update on main thread
                 self.root.after(0, lambda: self.update_result_images(result_image))
                   
-                pairs = self._process_pairing(headers, detected_blocks)
+                # pairs = self._process_pairing(headers, detected_blocks)
 
-                print(pairs)
+                # print(pairs)
 
                 
         except Exception as e:
