@@ -16,4 +16,13 @@ def extract_team_name(image):
     return texts, team_names
 
 def extract_block_data(block_image):
+    result = ocr.ocr(block_image)
+    texts = []
+    team_names = ""
+    for line in result:
+        for word_info in line:
+            text = word_info[1][0]   # the string
+            team_names += " " + text
+            texts.append(text)
     
+    return "".join(texts)

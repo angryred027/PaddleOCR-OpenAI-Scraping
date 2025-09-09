@@ -15,6 +15,8 @@ import mss
 import queue
 from detect_block import BlockDetector
 import extract_text
+import hashlib
+from collections import deque
 
 class MainUI:
     def __init__(self, root):
@@ -24,6 +26,10 @@ class MainUI:
         # Set window size to about half of 15.1 inch screen width (approx 900-950px wide)
         self.root.geometry("1000x700")
         self.root.minsize(1000, 700)
+        # Queues to keep leftovers across calls
+        self.header_queue = deque()
+        self.block_queue  = deque()
+        self.hash_values = []
 
         # Initialize MSS and preview variables
         self.mss_sct = None
@@ -929,6 +935,45 @@ class MainUI:
 
     # ========== Logo selection and pre-compute its histogram.
 
+    def get_hash(self, text: str) -> str:
+        """Return stable hash for a string."""
+        return hashlib.md5(text.encode('utf-8')).hexdigest()
+    
+    def check_processed(self, hash):
+        return self.hash_values.index(hash) != -1
+    
+    def pair_headers_blocks(self, new_headers, new_blocks):
+        # Add new unique headers to queue
+        for h_text, h_data in new_headers:
+            h_key = self.get_hash(h_text)
+            if h_key not in [self.get_hash(ht) for ht, _ in self.header_queue]:
+                self.header_queue.append((h_text, h_data))
+
+         # Add new unique blocks to queue
+        for b_text, b_data in new_blocks:
+            b_key = self.get_hash(b_text)
+            if b_key not in [self.get_hash(bt) for bt, _ in self.block_queue]:
+                self.block_queue.append((b_text, b_data))
+
+        # Pairing
+        pairs = []
+        h_index = 0
+        while h_index < len(self.header_queue):
+            header_text, header_obj = self.header_queue[h_index]
+            paired = False
+            for b_index, (block_text, block_obj) in enumerate(self.block_queue):
+                if block_obj.y > header_obj.y:
+                    # Pair and remove from queues
+                    pairs.append((header_obj, block_obj))
+                    self.header_queue.remove((header_text, header_obj))
+                    self.block_queue.remove((block_text, block_obj))
+                    paired = True
+                    break
+            if not paired:
+                h_index += 1
+
+        return pairs
+    
     def calculate_hist(self, logo):
         # Compute histogram of selected logo ROI
         logo_hsv = cv2.cvtColor(logo, cv2.COLOR_BGR2HSV)
@@ -1061,24 +1106,65 @@ class MainUI:
 
             if frame_bgr is not None and self.logo is not None and self.logo_hist is not None:
                 # Detect rectangles
-                all_rectangles, headers, original_image = self.detector.detect_rectangles(frame_bgr)
+                blocks, headers, original_image = self.detector.detect_rectangles(frame_bgr)
 
                 # Get top N blocks
-                top_10_rectangles = self.detector.get_top_n(all_rectangles, 10)
+                top_10_rectangles = self.detector.get_top_n(blocks, 10)
 
                 # Visualize
                 result_image, detected_blocks = self.detector.visualize_results(original_image, top_10_rectangles, headers)
 
                 # Pass numpy frame to update (use result_img if you want detection result shown)
                 self.update_result_images(result_image)
+                  
+                # pairs = self._process_pairing(headers, detected_blocks)
 
-                # for block in detected_blocks:
-                    
-
+                # print(pairs)
 
         except Exception as e:
             print(f"Block detection error: {e}")
 
+    def _process_pairing(self, headers, blocks):
+        # Add headers to queue if unique
+        for header in headers:
+            h_text = extract_text.extract_block_data(header)
+            h_hash = self.get_hash(h_text)
+            if not self.check_processed(h_hash):
+                self.hash_values.append(h_hash)
+                self.header_queue.append((header, h_text))  # keep text for Treeview
+
+        # Add blocks to queue if unique
+        for block in blocks:
+            b_text = extract_text.extract_block_data(block)
+            b_hash = self.get_hash(b_text)
+            if not self.check_processed(b_hash):
+                self.hash_values.append(b_hash)
+                self.block_queue.append((block, b_text))
+
+        pairs = []
+
+        # Try pairing headers with nearest block below
+        h_index = 0
+        while h_index < len(self.header_queue):
+            header, h_text = self.header_queue[h_index]
+            paired = False
+            for b_index, (block, b_text) in enumerate(self.block_queue):
+                if block.y > header.y:
+                    # ✅ Found a pair
+                    pairs.append((h_text, b_text))
+
+                    # Push into Treeview
+                    self.tree.insert("", "end", values=(h_text, b_text))
+
+                    # Remove from queues
+                    self.header_queue.pop(h_index)
+                    self.block_queue.pop(b_index)
+                    paired = True
+                    break
+            if not paired:
+                h_index += 1  # move to next header
+
+        return pairs
 
     def update_result_images(self, frame_bgr):
         """Update the detected_canvas with the latest processed frame without freezing UI."""

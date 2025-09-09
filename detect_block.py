@@ -53,7 +53,11 @@ class BlockDetector:
                     'area': area,
                     'center': (x + w // 2, y + h // 2)
                 })
-        return rectangles, headers, image
+
+        blocks = sorted(rectangles, key=lambda b: b[1])
+        headers = sorted(headers, key=lambda h: h[1]) 
+        
+        return blocks, headers, image
 
     def get_top_n(self, rectangles, n=10):
         """
