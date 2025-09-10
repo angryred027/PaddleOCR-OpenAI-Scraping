@@ -917,6 +917,7 @@ class MainUI:
             if frame_bgr is not None and self.logo is not None and self.logo_hist is not None and self.detector is not None:
                 blocks, headers, original_image = self.detector.detect_rectangles(frame_bgr)
                 top_10_rectangles = self.detector.get_top_n(blocks, 10)
+                _, _, _, h = top_10_rectangles[0]['coordinates']
                 result_image, detected_blocks = self.detector.visualize_results(original_image, top_10_rectangles, headers)
 
                 try:
@@ -930,7 +931,7 @@ class MainUI:
                 
                 self.root.after(50, self.extract_team_names)
                 
-                self._process_pairing(original_image, headers, detected_blocks)
+                self._process_pairing(original_image, headers, detected_blocks, h)
 
         except Exception as e:
             print(f"Block detection error: {e}")
@@ -1019,8 +1020,48 @@ class MainUI:
             print(f"Preprocessing error: {e}")
             return odds_block_image
 
-    def _process_pairing(self, original_image, headers, blocks):
-        def _get_header_text(region):
+    def _get_block_odds_text(self, original_image, block):
+        x, y, w, h = block['coordinates']
+                
+        block_image = self._crop_image(original_image, block)
+        if block_image is None or block_image.size == 0:
+            return ""
+            
+        odds_blocks = self.detector.detect_odds_blocks(block_image) if self.detector else []
+
+        text_concat = ""
+        odds = ""
+        count = 0
+        num_odds_blocks = len(odds_blocks)
+        
+        for odds_block in odds_blocks:
+            odds_block_image = self._crop_image(block_image, odds_block)
+            if odds_block_image is None or odds_block_image.size == 0:
+                continue
+                
+            preprocessed = self._preprocess_odds_block_image(odds_block_image)
+            if preprocessed is None:
+                continue
+                
+            with self.ocr_lock:
+                odds_texts = extract_text.get_odds_data(preprocessed)
+
+            odds += f"({odds_texts[0]}, {odds_texts[1]})"
+
+            count += 1
+            if count < num_odds_blocks:
+                odds += ", "
+            
+            if num_odds_blocks > 2:
+                chunk_size = 2 if num_odds_blocks % 2 == 0 and num_odds_blocks % 6 != 0 else 3
+                if count % chunk_size == 0:
+                    odds += "\n"
+
+            text_concat += odds_texts[1]
+
+        return odds, text_concat
+
+    def _get_header_text(self, original_image, region):
             try:
                 x, y, w, h = region['coordinates']
                 h_img, w_img = original_image.shape[:2]
@@ -1033,142 +1074,78 @@ class MainUI:
 
                 crop_image = original_image[y:y+h, x:x+w]
                 if crop_image.size == 0:
-                    return "", None
+                    return ""
                     
                 pre = self._preprocess_odds_block_image(crop_image)
                 if pre is None:
-                    return "", None
+                    return ""
                     
                 text = extract_text.extract_block_data(pre)
-                normalized_text = self.normalize_text(text)
-                hsh = self.get_hash(normalized_text)
-                return text, hsh
+                return text
             except Exception as e:
                 print(f"Error during text extraction: {e}")
-                return "", None
+                return ""
 
-        current_new_headers = []
-        current_new_blocks = []
+    def _process_pairing(self, original_image, headers, blocks, block_height):
+        num_headers = len(headers)
+        num_blocks = len(blocks)
+        if block_height > 160 and block_height < 200:
+            if len(self.orphan_headers) == 1 and num_blocks == 1:
+                header = self.orphan_headers[0]
+                block = blocks[0]
+                h_text = self._get_header_text(original_image, header)
+                b_text, b_odds = self._get_block_odds_text(original_image, block)
+                combined = h_text + b_text
+                normalize = self.normalize_text(b_odds)
+                hash = self.get_hash(normalize)
+                if not self.check_processed(hash):
+                    self.hash_values.add(hash)
+                    self.insert_pair_to_treeview(h_text, b_text)
+                return
 
-        for header in headers:
-            h_text, h_hash = _get_header_text(header)
-            if h_hash and not self.check_processed(h_hash):
-                header['text'] = h_text
-                current_new_headers.append(header)
+            if num_headers == 1 and num_blocks == 0:
+                self.orphan_headers.append(headers[0])
+                return
 
-                print(f"Header = {header['text']}, Hash = {h_hash} is added.")
-            else:
-                print(f"Already processed: Text = {h_text}, Hash = {h_hash}")
+        if len(self.orphan_headers) == 1 and len(self.orphan_blocks) == 1 and num_blocks == 1 and block_height > 200:
+            header = self.orphan_headers[0]
+            h_text = self._get_header_text(original_image, header)
+            first_block = self.orphan_blocks[0]
+            last_block = blocks[0]
+            str1, _ = self._get_block_odds_text(original_image, first_block)[0] + ", "
+            str2, _ = self._get_block_odds_text(original_image, last_block)[0]
+            str = str1 + str2
+            normalized_text = self.normalize_2blocks_odds_string(str)
+            self.insert_pair_to_treeview(h_text, normalized_text)
+            self.orphan_headers.clear()
+            self.orphan_blocks.clear()
 
-        for block in blocks:
-            x, y, w, h = block['coordinates']
-            if h > 300 and len(self.orphan_blocks) == 0:
-                self.orphan_blocks.append(block)
-                print(f"A block has been added as orphan block.")
-                continue
-            elif  h > 300 and len(self.orphan_blocks) == 1:
-                current_new_blocks.append(block)
-                continue
-                    
-            block_image = self._crop_image(original_image, block)
-            if block_image is None or block_image.size == 0:
-                continue
-                
-            odds_blocks = self.detector.detect_odds_blocks(block_image) if self.detector else []
+        if block_height > 200 and num_blocks == 1:
+            self.orphan_blocks.append(blocks[0])
+            return
 
-            text_concat = ""
-            odds = ""
-            count = 0
-            num_blocks = len(odds_blocks)
-            
-            for odds_block in odds_blocks:
-                odds_block_image = self._crop_image(block_image, odds_block)
-                if odds_block_image is None or odds_block_image.size == 0:
-                    continue
-                    
-                preprocessed = self._preprocess_odds_block_image(odds_block_image)
-                if preprocessed is None:
-                    continue
-                    
-                with self.ocr_lock:
-                    odds_texts = extract_text.get_odds_data(preprocessed)
-
-                odds += f"({odds_texts[0]}, {odds_texts[1]})"
-
-                count += 1
-                if count < num_blocks:
-                    odds += ", "
-                
-                if num_blocks > 2:
-                    chunk_size = 2 if num_blocks % 2 == 0 and num_blocks % 6 != 0 else 3
-                    if count % chunk_size == 0:
-                        odds += "\n"
-
-                text_concat += odds_texts[1]
-
-            if text_concat:
-                b_hash = self.get_hash(text_concat)
-                if not self.check_processed(b_hash):
-                    block['text'] = odds
-                    current_new_blocks.append(block)
-
-        i = 0
-        while i < len(current_new_headers):
-            header = current_new_headers[i]
+        i = num_headers - 1
+        while i >= 0:
+            header = headers[i]
             hy = header['coordinates'][1]
-
             matched = False
-            for j, block in enumerate(current_new_blocks):
+            for j, block in enumerate(blocks):
                 by = block['coordinates'][1]
-
                 if hy < by:
-                    block_text = block.get('text', '-')
-                    self.hash_values.add(self.get_hash(header['text']))
-                    self.insert_pair_to_treeview(header['text'], block_text)
-                    current_new_headers.pop(i)
-                    current_new_blocks.pop(j)
+                    h_text = self._get_header_text(original_image, header)
+                    b_text, b_odds = self._get_block_odds_text(original_image, block)
+                    combined = h_text + b_text
+                    normalized = self.normalize_text(b_odds)
+                    hash = self.get_hash(normalized)
+                    if not self.check_processed(hash):
+                        self.hash_values.add(hash)
+                        self.insert_pair_to_treeview(h_text, b_text)
+                    headers.pop(i)
+                    blocks.pop(j)
                     matched = True
                     break
-
             if not matched:
-                i += 1
-
-        if len(current_new_headers) == 1 and len(current_new_blocks) == 0 and len(self.orphan_headers) == 0:
-            self.orphan_headers.append(current_new_headers[0])
-            print(f"{current_new_headers[0]['text']} has been added as orphan header.")
-
-        if len(self.orphan_headers) == 1 and len(current_new_blocks) == 1:
-            block = current_new_blocks[0]
-            x, y, w, h = block['coordinates']
-            if h > self.roi_coordinates['height'] * 0.7 and len(self.orphan_blocks) == 0:
-                self.orphan_blocks.append(block)
-                print(f"{block['text']} has been added as orphan block.")
-                return
-            elif h < self.roi_coordinates['height'] * 0.7 and h > 300:
-                header = self.orphan_headers[0]
-                h_hash = self.get_hash(header['text'])
-                self.hash_values.add(h_hash)
-                block_text = block.get('text', '-')
-                self.insert_pair_to_treeview(header['text'], block_text)
-                h_text = header['text']
-                h_hash = self.get_hash(self.normalize_text(h_text))
-                self.hash_values.add(h_hash)
-                self.orphan_headers.clear()
-
-        if len(self.orphan_headers) == 1 and len(self.orphan_blocks) == 1 and len(current_new_blocks) == 1:
-                header = self.orphan_headers[0]
-                h_hash = self.get_hash(header['text'])
-                self.hash_values.add(h_hash)
-                h_hash = self.get_hash(self.normalize_text(header['text']))
-                self.hash_values.add(h_hash)
-                first_block = self.orphan_blocks[0]
-                last_block = current_new_blocks[0]
-                combined_text = first_block['text'] + ", " + last_block['text']
-                normalized_text = self.normalize_2blocks_odds_string(combined_text)
-
-                self.insert_pair_to_treeview(header['text'], normalized_text)
-                self.orphan_headers.clear()
-                self.orphan_blocks.clear()
+                i -= 1
 
     def normalize_2blocks_odds_string(self, data): 
         if not data:
