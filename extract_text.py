@@ -46,7 +46,7 @@ def get_odds_data(odds_block):
     for line in result:
         for word in line:
             text = word[1][0] if word[1][0] else '-'
-            text = text.upper()
+            # text = text.upper()
             texts.append(text)
         
     if len(texts) == 0:
@@ -61,4 +61,7 @@ def get_odds_data(odds_block):
         else:
             return [texts[0], '-']
     else:
-        return texts[:2]
+        if pattern.match(texts[1]):
+            return texts[:2]
+        else:
+            return [texts[0], '-']

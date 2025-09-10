@@ -1138,7 +1138,10 @@ class MainUI:
                    [-1,  5, -1],
                    [0, -1,  0]])
 
+        scale_factor = 2
         sharpened = cv2.filter2D(gray, -1, kernel)
+        height, width = sharpened.shape[:2]
+        image_resized = cv2.resize(sharpened, (width*scale_factor, height*scale_factor), interpolation=cv2.INTER_CUBIC)
 
         # _, thresh = cv2.threshold(sharpened, 200, 255, cv2.THRESH_BINARY)     
         # white = cv2.bitwise_not(thresh)
@@ -1147,7 +1150,7 @@ class MainUI:
 
         # cv2.imwrite("preprocessing1.png", thresh)
         # cv2.imwrite("preprocessing2.png", white)
-        return sharpened
+        return image_resized
 
     def _process_pairing(self, original_image, headers, blocks):
 
