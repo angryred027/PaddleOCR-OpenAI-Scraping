@@ -104,24 +104,23 @@ class BlockDetector:
         """
         result_image = image.copy()
         detected = []
+        odds_blocks = []
 
         for rect in top_rectangles:
             x, y, w, h = rect['coordinates']
             block_crop = image[y:y + h, x:x + w]
-            thresh = self.thresh
-            thresh_crop = thresh[y:y + h, x:x + w] # type: ignore
 
             has_logo, score = self.check_logo_in_block(block_crop)
-            text_blocks = []
+            odds_blocks = []
 
             if has_logo:
                 color = (0, 0, 255)  # red if logo detected
                 text = f"Logo {score:.2f}"
                 detected.append(rect)
-                text_blocks = self.detect_text_blocks(thresh_crop)
+                odds_blocks = self.detect_odds_blocks(block_crop)
 
-                for text_block in text_blocks:
-                    tx, ty, tw, th = text_block['coordinates']
+                for odds_block in odds_blocks:
+                    tx, ty, tw, th = odds_block['coordinates']
                     cv2.rectangle(result_image, (x + tx, y + ty), (x + tx + tw, y + ty + th), (255, 0, 0), 3)
             else:
                 color = (0, 255, 0)  # green if no logo
@@ -137,16 +136,20 @@ class BlockDetector:
 
         return result_image, detected
 
-    def detect_text_blocks(self, image):
+    def detect_odds_blocks(self, image):
         # image should be row block image
-        text_blocks = []
+        odds_blocks = []
         h, w = image.shape[:2]
         x_start = int(w * 0.4)
         cropped = image[:, x_start:w]
-        cv2.imwrite("cropped.png", cropped)
+        gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
+
+        # Threshold
+        _, thresh = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY_INV)
+        cv2.imwrite("cropped.png", thresh)
 
         contours, _ = cv2.findContours(
-            cropped, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
 
         for contour in contours:
@@ -155,9 +158,9 @@ class BlockDetector:
                 tx, ty, tw, th = cv2.boundingRect(contour)
                 x = x_start + tx
                 y = ty
-                text_blocks.append({
+                odds_blocks.append({
                     'coordinates': (x, y, tw, th),
                     'area': area,
                 })
         
-        return text_blocks
+        return odds_blocks

@@ -1125,22 +1125,30 @@ class MainUI:
             import traceback
             traceback.print_exc()  # This will show the full traceback
 
+    def _crop_image(self, image, region):
+        x, y, w, h = region['coordinates']
+
+        crop_image = image[y:y+h, x:x+w]
+
+        return crop_image
+    
+    def _preprocess_odds_block_image(self, odds_block_image):
+        gray = cv2.cvtColor(odds_block_image, cv2.COLOR_BGR2GRAY) # type: ignore
+        _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)     
+
+        return thresh
+
     def _process_pairing(self, original_image, headers, blocks):
 
         def _get_text(region, is_header=False):
+            
             x, y, w, h = region['coordinates']
             h_img, w_img = original_image.shape[:2]
-
-            # Adjust crop area based on type
             if is_header:
-                # Left 50%
                 w = int(w * 0.5)
             else:
-                # Right 60%
                 x = x + int(w * 0.4)
                 w = int(w * 0.6)
-
-            # Clamp to image boundaries
             x = max(0, min(x, w_img - 1))
             y = max(0, min(y, h_img - 1))
             w = max(1, min(w, w_img - x))
@@ -1149,8 +1157,6 @@ class MainUI:
             crop_image = original_image[y:y+h, x:x+w]
             if crop_image.size == 0:
                 return "", None
-
-            # crop_image = np.ascontiguousarray(crop_image)  # make sure PaddleOCR likes it
             try:
                 text = extract_text.extract_block_data(crop_image)
                 hsh = self.get_hash(text)
@@ -1161,10 +1167,10 @@ class MainUI:
                 traceback.print_exc()  # This will show the full traceback
                 cv2.imwrite("error.png", crop_image)
 
-
-
         current_new_headers = []
         current_new_blocks = []
+        odds_blocks = []
+        odds_texts = []
 
         # Filter new headers
         for header in headers:
@@ -1175,6 +1181,16 @@ class MainUI:
 
         # Filter new blocks
         for block in blocks:
+            block_image = self._crop_image(original_image, block)
+            odds_blocks = self.detector.detect_odds_blocks(block_image)
+
+            for odds_block in odds_blocks:
+                odds_block_image = self._crop_image(block_image, odds_block) # type: ignore
+                preprocessed = self._preprocess_odds_block_image(odds_block_image)
+                odds_texts = extract_text.get_odds_data(preprocessed)
+
+                print(f"({odds_texts[0]}, {odds_texts[1]})")
+
             b_text, b_hash = _get_text(block, False)
             if not self.check_processed(b_hash):
                 block['text'] = b_text
