@@ -1134,9 +1134,20 @@ class MainUI:
     
     def _preprocess_odds_block_image(self, odds_block_image):
         gray = cv2.cvtColor(odds_block_image, cv2.COLOR_BGR2GRAY) # type: ignore
-        _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)     
+        kernel = np.array([[0, -1,  0],
+                   [-1,  5, -1],
+                   [0, -1,  0]])
 
-        return thresh
+        sharpened = cv2.filter2D(gray, -1, kernel)
+
+        # _, thresh = cv2.threshold(sharpened, 200, 255, cv2.THRESH_BINARY)     
+        # white = cv2.bitwise_not(thresh)
+
+        # pre = cv2.bitwise_and(thresh, white)
+
+        # cv2.imwrite("preprocessing1.png", thresh)
+        # cv2.imwrite("preprocessing2.png", white)
+        return sharpened
 
     def _process_pairing(self, original_image, headers, blocks):
 

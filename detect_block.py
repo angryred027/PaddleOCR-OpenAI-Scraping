@@ -146,7 +146,6 @@ class BlockDetector:
 
         # Threshold
         _, thresh = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY_INV)
-        cv2.imwrite("cropped.png", thresh)
 
         contours, _ = cv2.findContours(
             thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE

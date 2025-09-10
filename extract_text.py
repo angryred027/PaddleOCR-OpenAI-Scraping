@@ -1,4 +1,9 @@
 from paddleocr import PaddleOCR
+import re
+import cv2
+import random
+
+pattern = re.compile(r'^\d+\.\d{2}$')
 
 # Initialize OCR only once to avoid threading issues
 _ocr_instance = None
@@ -41,12 +46,19 @@ def get_odds_data(odds_block):
     for line in result:
         for word in line:
             text = word[1][0] if word[1][0] else '-'
-            text.upper()
+            text = text.upper()
             texts.append(text)
         
     if len(texts) == 0:
+            num = random.randint(100000, 999999)
+            cv2.imwrite(f"{num}.png", odds_block)
             return ['-', '-']
     elif len(texts) == 1:
-        return [texts[0], '-']
+        if pattern.match(texts[0]):
+            num = random.randint(100000, 999999)
+            cv2.imwrite(f"{num}.png", odds_block)
+            return ['-', texts[0]]
+        else:
+            return [texts[0], '-']
     else:
         return texts[:2]
