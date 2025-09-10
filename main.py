@@ -568,6 +568,8 @@ class MainUI:
             self.extract_team_names()
             self.current_id = 1
             self.hash_values.clear()
+            self.orphan_headers.clear()
+            self.orphan_blocks.clear()
         
         elif self.is_running and not self.is_paused:
             self.stop_scroll_detection()
@@ -818,10 +820,7 @@ class MainUI:
         return hashlib.md5(text.encode('utf-8')).hexdigest()
     
     def check_processed(self, hash_value):
-        if hash_value in self.hash_values:
-            return True
-        else:
-            return False
+        return hash_value in self.hash_values
     
     def calculate_hist(self, logo):
         try:
@@ -1041,8 +1040,8 @@ class MainUI:
                     return "", None
                     
                 text = extract_text.extract_block_data(pre)
-                text = self.normalize_text(text)
-                hsh = self.get_hash(text)
+                normalized_text = self.normalize_text(text)
+                hsh = self.get_hash(normalized_text)
                 return text, hsh
             except Exception as e:
                 print(f"Error during text extraction: {e}")
@@ -1056,14 +1055,13 @@ class MainUI:
             if h_hash and not self.check_processed(h_hash):
                 header['text'] = h_text
                 current_new_headers.append(header)
-                self.hash_values.add(h_hash)
 
                 print(f"Header = {header['text']}, Hash = {h_hash} is added.")
             else:
                 print(f"Already processed: Text = {h_text}, Hash = {h_hash}")
 
         for block in blocks:
-            x,y, w, h = block['coordinates']
+            x, y, w, h = block['coordinates']
             if h > 300 and len(self.orphan_blocks) == 0:
                 self.orphan_blocks.append(block)
                 print(f"A block has been added as orphan block.")
@@ -1125,6 +1123,7 @@ class MainUI:
 
                 if hy < by:
                     block_text = block.get('text', '-')
+                    self.hash_values.add(self.get_hash(header['text']))
                     self.insert_pair_to_treeview(header['text'], block_text)
                     current_new_headers.pop(i)
                     current_new_blocks.pop(j)
@@ -1147,6 +1146,8 @@ class MainUI:
                 return
             elif h < self.roi_coordinates['height'] * 0.7 and h > 300:
                 header = self.orphan_headers[0]
+                h_hash = self.get_hash(header['text'])
+                self.hash_values.add(h_hash)
                 block_text = block.get('text', '-')
                 self.insert_pair_to_treeview(header['text'], block_text)
                 h_text = header['text']
@@ -1156,6 +1157,8 @@ class MainUI:
 
         if len(self.orphan_headers) == 1 and len(self.orphan_blocks) == 1 and len(current_new_blocks) == 1:
                 header = self.orphan_headers[0]
+                h_hash = self.get_hash(header['text'])
+                self.hash_values.add(h_hash)
                 h_hash = self.get_hash(self.normalize_text(header['text']))
                 self.hash_values.add(h_hash)
                 first_block = self.orphan_blocks[0]
