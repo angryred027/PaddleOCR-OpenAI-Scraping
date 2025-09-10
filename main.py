@@ -935,6 +935,8 @@ class MainUI:
 
         except Exception as e:
             print(f"Block detection error: {e}")
+            import traceback
+            traceback.print_exc() 
 
     def update_result_images_from_queue(self):
         if self._shutdown:
@@ -1102,34 +1104,50 @@ class MainUI:
                     self.hash_values.add(hash)
                     self.insert_pair_to_treeview(h_text, b_text)
                 return
-
             if num_headers == 1 and num_blocks == 0:
                 self.orphan_headers.append(headers[0])
                 return
+        if block_height > 300:
 
-        if len(self.orphan_headers) == 1 and len(self.orphan_blocks) == 1 and num_blocks == 1 and block_height > 200:
-            header = self.orphan_headers[0]
-            h_text = self._get_header_text(original_image, header)
-            first_block = self.orphan_blocks[0]
-            last_block = blocks[0]
-            str1, _ = self._get_block_odds_text(original_image, first_block)[0] + ", "
-            str2, _ = self._get_block_odds_text(original_image, last_block)[0]
-            str = str1 + str2
-            normalized_text = self.normalize_2blocks_odds_string(str)
-            self.insert_pair_to_treeview(h_text, normalized_text)
-            self.orphan_headers.clear()
-            self.orphan_blocks.clear()
+            if len(self.orphan_headers) == 0 and num_headers == 1:
+                self.orphan_headers.append(headers[0])
 
-        if block_height > 200 and num_blocks == 1:
-            self.orphan_blocks.append(blocks[0])
-            return
+                if num_blocks == 1:
+                    self.orphan_blocks.append(blocks[0])
+                    return
 
-        i = num_headers - 1
-        while i >= 0:
-            header = headers[i]
+            if len(self.orphan_headers) == 1 and len(self.orphan_blocks) == 1 and num_blocks == 1:
+                block = blocks[0]
+                x, y, w, h = block['coordinates']
+
+                if h > 500 and x < 30:
+                    header = self.orphan_headers[0]
+                    h_text = self._get_header_text(original_image, header)
+                    first_block = self.orphan_blocks[0]
+                    last_block = blocks[0]
+                    str1 = self._get_block_odds_text(original_image, first_block)[0] + ", "
+                    str2 = self._get_block_odds_text(original_image, last_block)[0]
+                    str = str1 + str2
+                    normalized_text = self.normalize_2blocks_odds_string(str)
+                    self.insert_pair_to_treeview(h_text, normalized_text)
+                    self.orphan_headers.clear()
+                    self.orphan_blocks.clear()
+                
+            if block_height > 200 and len(self.orphan_blocks) == 0 and num_blocks == 1:
+                self.orphan_blocks.append(blocks[0])
+                return
+        
+        headers_copy = list(headers)
+        blocks_copy = list(blocks)
+        
+        i = 0
+        while i < len(headers_copy):
+            header = headers_copy[i]
             hy = header['coordinates'][1]
             matched = False
-            for j, block in enumerate(blocks):
+            j = 0
+            while j < len(blocks_copy):
+                block = blocks_copy[j]
                 by = block['coordinates'][1]
                 if hy < by:
                     h_text = self._get_header_text(original_image, header)
@@ -1140,13 +1158,14 @@ class MainUI:
                     if not self.check_processed(hash):
                         self.hash_values.add(hash)
                         self.insert_pair_to_treeview(h_text, b_text)
-                    headers.pop(i)
-                    blocks.pop(j)
+                    headers_copy.pop(i)
+                    blocks_copy.pop(j)
                     matched = True
                     break
+                j += 1
             if not matched:
-                i -= 1
-
+                i += 1
+                
     def normalize_2blocks_odds_string(self, data): 
         if not data:
             return ""
