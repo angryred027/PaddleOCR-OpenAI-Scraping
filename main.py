@@ -15,7 +15,9 @@ import extract_text
 import hashlib
 from collections import deque
 import gc
-import weakref
+import re
+import csv
+from openpyxl import Workbook
 
 class ThreadSafeImage:
     def __init__(self):
@@ -91,6 +93,9 @@ class MainUI:
 
         self.original_image = None
         self.detected_image = None
+
+        self.orphan_headers = deque(maxlen=2)
+        self.orphan_blocks = deque(maxlen=2)
         
         self.api_key = tk.StringVar()
         self.scroll_value = tk.IntVar(value=5000)
@@ -346,7 +351,8 @@ class MainUI:
                 self.tree.delete(item)
             
             self.data_counter = 0
-            self.current_id = 0
+            self.current_id = 1
+            self.hash_values.clear()
             messagebox.showinfo("Success", "All rows cleared successfully")
 
     def create_context_menu(self):
@@ -461,7 +467,9 @@ class MainUI:
                         if self.current_team_names != team_name:
                             self.team_name.set(team_name)
                             self.current_team_names = team_name
+                            self.data_counter = 0
                             self.current_id = 1
+                            self.hash_values.clear()
                             for item in self.tree.get_children():
                                 self.tree.delete(item)
                             self.team_entry.configure(style="Normal.TEntry") 
@@ -577,12 +585,34 @@ class MainUI:
             self.hash_values.clear()
             
     def export_csv(self):
-        print("Export to CSV clicked")
-        messagebox.showinfo("Export", "Data would be exported to CSV file")
+        columns = self.tree['columns']
+        filename = self.current_team_names + "_" + self.date_time.get() + ".csv"
+        safe_name = re.sub(r'[\\/:"*?<>|]+', '_', filename)
+        with open(safe_name, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(columns)
+
+            for item_id in self.tree.get_children():
+                row = self.tree.item(item_id)['values']
+                writer.writerow(row)
+
+        messagebox.showinfo("Export", f"Data has been exported to CSV file: {safe_name}")
+
         
     def export_excel(self):
-        print("Export to Excel clicked")
-        messagebox.showinfo("Export", "Data would be exported to Excel file")
+        wb = Workbook()
+        filename = self.current_team_names + "_" + self.date_time.get() + ".xlsx"
+        safe_name = re.sub(r'[\\/:"*?<>|]+', '_', filename)
+        ws = wb.active
+
+        columns = self.tree['columns']
+        ws.append(columns)
+        for item_id in self.tree.get_children():
+            row = self.tree.item(item_id)['values']
+            ws.append(row)
+
+        wb.save(safe_name)
+        messagebox.showinfo("Export", f"Data has been exported to Excel file: {safe_name}")
         
     def on_double_click(self, event):
         selection = self.tree.selection()
@@ -791,7 +821,6 @@ class MainUI:
         if hash_value in self.hash_values:
             return True
         else:
-            self.hash_values.add(hash_value)
             return False
     
     def calculate_hist(self, logo):
@@ -966,6 +995,13 @@ class MainUI:
         
         return image[y:y+h, x:x+w]
     
+    def normalize_text(self, text):
+        if not text:
+            return ""
+        text = text.upper()
+        text = re.sub(r'\s+', '', text)
+        return text
+    
     def _preprocess_odds_block_image(self, odds_block_image):
         if odds_block_image is None or odds_block_image.size == 0:
             return None
@@ -1005,7 +1041,8 @@ class MainUI:
                     return "", None
                     
                 text = extract_text.extract_block_data(pre)
-                hsh = self.get_hash(text.upper())
+                text = self.normalize_text(text)
+                hsh = self.get_hash(text)
                 return text, hsh
             except Exception as e:
                 print(f"Error during text extraction: {e}")
@@ -1019,8 +1056,22 @@ class MainUI:
             if h_hash and not self.check_processed(h_hash):
                 header['text'] = h_text
                 current_new_headers.append(header)
+                self.hash_values.add(h_hash)
+
+                print(f"Header = {header['text']}, Hash = {h_hash} is added.")
+            else:
+                print(f"Already processed: Text = {h_text}, Hash = {h_hash}")
 
         for block in blocks:
+            x,y, w, h = block['coordinates']
+            if h > 300 and len(self.orphan_blocks) == 0:
+                self.orphan_blocks.append(block)
+                print(f"A block has been added as orphan block.")
+                continue
+            elif  h > 300 and len(self.orphan_blocks) == 1:
+                current_new_blocks.append(block)
+                continue
+                    
             block_image = self._crop_image(original_image, block)
             if block_image is None or block_image.size == 0:
                 continue
@@ -1063,12 +1114,75 @@ class MainUI:
                     block['text'] = odds
                     current_new_blocks.append(block)
 
-        for header in current_new_headers:
-            for i, block in enumerate(current_new_blocks):
-                if header['coordinates'][1] < block['coordinates'][1]:
-                    current_new_blocks.pop(i)
-                    self.insert_pair_to_treeview(header['text'], block['text'])
+        i = 0
+        while i < len(current_new_headers):
+            header = current_new_headers[i]
+            hy = header['coordinates'][1]
+
+            matched = False
+            for j, block in enumerate(current_new_blocks):
+                by = block['coordinates'][1]
+
+                if hy < by:
+                    block_text = block.get('text', '-')
+                    self.insert_pair_to_treeview(header['text'], block_text)
+                    current_new_headers.pop(i)
+                    current_new_blocks.pop(j)
+                    matched = True
                     break
+
+            if not matched:
+                i += 1
+
+        if len(current_new_headers) == 1 and len(current_new_blocks) == 0 and len(self.orphan_headers) == 0:
+            self.orphan_headers.append(current_new_headers[0])
+            print(f"{current_new_headers[0]['text']} has been added as orphan header.")
+
+        if len(self.orphan_headers) == 1 and len(current_new_blocks) == 1:
+            block = current_new_blocks[0]
+            x, y, w, h = block['coordinates']
+            if h > self.roi_coordinates['height'] * 0.7 and len(self.orphan_blocks) == 0:
+                self.orphan_blocks.append(block)
+                print(f"{block['text']} has been added as orphan block.")
+                return
+            elif h < self.roi_coordinates['height'] * 0.7 and h > 300:
+                header = self.orphan_headers[0]
+                block_text = block.get('text', '-')
+                self.insert_pair_to_treeview(header['text'], block_text)
+                h_text = header['text']
+                h_hash = self.get_hash(self.normalize_text(h_text))
+                self.hash_values.add(h_hash)
+                self.orphan_headers.clear()
+
+        if len(self.orphan_headers) == 1 and len(self.orphan_blocks) == 1 and len(current_new_blocks) == 1:
+                header = self.orphan_headers[0]
+                h_hash = self.get_hash(self.normalize_text(header['text']))
+                self.hash_values.add(h_hash)
+                first_block = self.orphan_blocks[0]
+                last_block = current_new_blocks[0]
+                combined_text = first_block['text'] + ", " + last_block['text']
+                normalized_text = self.normalize_2blocks_odds_string(combined_text)
+
+                self.insert_pair_to_treeview(header['text'], normalized_text)
+                self.orphan_headers.clear()
+                self.orphan_blocks.clear()
+
+    def normalize_2blocks_odds_string(self, data): 
+        if not data:
+            return ""
+        data_clean = re.sub(r'\s+', '', data)
+        entries = data_clean.split('),(')
+        entries[0] = entries[0].lstrip('(')
+        entries[-1] = entries[-1].rstrip(')')
+        seen = set()
+        normalized = []
+        for entry in entries:
+            if entry not in seen:
+                seen.add(entry)
+                normalized.append(entry)
+
+        result = ', '.join(f'({e})' for e in normalized)
+        return result
 
     def insert_pair_to_treeview(self, header_text, odds_text):
         if not self._shutdown:
