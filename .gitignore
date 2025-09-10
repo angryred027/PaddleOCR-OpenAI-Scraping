@@ -2,3 +2,7 @@
 *.png
 
 /venv/
+/test_images/*
+/resource/*
+
+__pycache__

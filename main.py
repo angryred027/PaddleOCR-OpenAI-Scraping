@@ -1120,7 +1120,7 @@ class MainUI:
                   
                 self._process_pairing(original_image, headers, detected_blocks)
 
-                cv2.imwrite("original", original_image)
+                cv2.imwrite("original.png", original_image)
 
                 
         except Exception as e:
@@ -1302,7 +1302,7 @@ class MainUI:
 
 def main():
     """Main function to run the application"""
-    print("Starting NESINE Odds Scraper...")
+    print("Starting Makcolik Odds Scraper...")
     
     # Create the main window with ttkbootstrap
     root = tb.Window()

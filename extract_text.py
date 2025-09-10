@@ -6,7 +6,7 @@ _ocr_instance = None
 def get_ocr():
     global _ocr_instance
     if _ocr_instance is None:
-        _ocr_instance = PaddleOCR(use_angle_cls=True, lang='tr', use_gpu=False)
+        _ocr_instance = PaddleOCR(use_angle_cls=True, lang='tr', show_log=False)
     return _ocr_instance
 
 def extract_team_name(image):
