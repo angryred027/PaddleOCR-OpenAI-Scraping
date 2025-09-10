@@ -39,14 +39,13 @@ class MainUI:
 
         self.current_id = 1
         self.current_team_names = ""
-        self.header_queue = deque(maxlen=100)
-        self.block_queue = deque(maxlen=100)
         self.hash_values = set()
 
         self.mss_sct = None
         self.roi_preview_running = False
         self.preview_thread = None
         self.image_queue = queue.Queue(maxsize=2)
+        self.result_image_queue = queue.Queue(maxsize=2)
         
         self.original_photo = None
         self.detected_photo = None
@@ -103,6 +102,7 @@ class MainUI:
         
         self.setup_ui()
         self.update_preview_images()
+        self.update_result_images_from_queue()
         
     def setup_ui(self):
         self.root.grid_rowconfigure(0, weight=4)
@@ -783,14 +783,7 @@ class MainUI:
                     self.image_queue.get_nowait()
                 except queue.Empty:
                     break
-    def safe_canvas_update(self, canvas, image_item, photo_image, reference_attr):
-        if not self._shutdown and canvas.winfo_exists():
-            try:
-                canvas.itemconfig(image_item, image=photo_image)
-                setattr(self, reference_attr, photo_image)
-            except Exception as e:
-                print(f"Canvas update error: {e}")
-
+    
     def get_hash(self, text: str) -> str:
         return hashlib.md5(text.encode('utf-8')).hexdigest()
     
@@ -898,13 +891,66 @@ class MainUI:
                 top_10_rectangles = self.detector.get_top_n(blocks, 10)
                 result_image, detected_blocks = self.detector.visualize_results(original_image, top_10_rectangles, headers)
 
-                self.root.after(50, lambda: self.update_result_images(result_image))
-                self.root.after(50, self.extract_team_names)
-                  
-                self._process_pairing(original_image, headers, detected_blocks)
+                try:
+                    self.result_image_queue.put_nowait(result_image)
+                except queue.Full:
+                    try:
+                        self.result_image_queue.get_nowait()
+                        self.result_image_queue.put_nowait(result_image)
+                    except queue.Empty:
+                        pass
                 
+                self.root.after(50, self.extract_team_names)
+                
+                self._process_pairing(original_image, headers, detected_blocks)
+
         except Exception as e:
             print(f"Block detection error: {e}")
+
+    def update_result_images_from_queue(self):
+        if self._shutdown:
+            return
+            
+        try:
+            result_image = None
+            try:
+                result_image = self.result_image_queue.get_nowait()
+            except queue.Empty:
+                pass
+                
+            if result_image is not None:
+                rgb_frame = cv2.cvtColor(result_image, cv2.COLOR_BGR2RGB)
+                pil_image = Image.fromarray(rgb_frame)
+
+                canvas_width = 270
+                canvas_height = 540
+                
+                img_width, img_height = pil_image.size
+                aspect_ratio = img_width / img_height
+                
+                if aspect_ratio > (canvas_width / canvas_height):
+                    new_width = canvas_width
+                    new_height = int(canvas_width / aspect_ratio)
+                else:
+                    new_height = canvas_height
+                    new_width = int(canvas_height * aspect_ratio)
+                
+                pil_image = pil_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                
+                detected_photo = ImageTk.PhotoImage(pil_image)
+                
+                if hasattr(self, 'detected_placeholder') and self.detected_placeholder:
+                    self.detected_canvas.delete(self.detected_placeholder)
+                    self.detected_placeholder = None
+                
+                self.detected_canvas.itemconfig(self.detected_canvas_image, image=detected_photo)
+                self.detected_photo = detected_photo 
+                
+        except Exception as e:
+            print(f"Result image update error: {e}")
+        
+        if self.root.winfo_exists() and not self._shutdown:
+            self.root.after(50, self.update_result_images_from_queue)
 
     def _crop_image(self, image, region):
         if image is None or image.size == 0:
@@ -1038,43 +1084,6 @@ class MainUI:
             self.current_id += 1
         except Exception as e:
             print(f"Insert pair error: {e}")
-
-    def update_result_images(self, frame_bgr):
-        if hasattr(self, 'detected_placeholder') and self.detected_placeholder:
-            self.detected_canvas.delete(self.detected_placeholder)
-            self.detected_placeholder = None
-
-        def task():
-            try:
-                rgb_frame = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-                pil_image = Image.fromarray(rgb_frame)
-
-                canvas_width = 270
-                canvas_height = 540
-                
-                img_width, img_height = pil_image.size
-                aspect_ratio = img_width / img_height
-                
-                if aspect_ratio > (canvas_width / canvas_height):
-                    new_width = canvas_width
-                    new_height = int(canvas_width / aspect_ratio)
-                else:
-                    new_height = canvas_height
-                    new_width = int(canvas_height * aspect_ratio)
-                
-                pil_image = pil_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                self.detected_photo = ImageTk.PhotoImage(pil_image)
-
-                if not self._shutdown and self.detected_canvas.winfo_exists():
-                    self.safe_canvas_update(self.detected_canvas, 
-                               self.detected_canvas_image, 
-                               self.detected_photo, 
-                               "detected_photo")
-                
-            except Exception as e:
-                print(f"update_result_images error: {e}")
-
-        threading.Thread(target=task, daemon=True).start()
 
     def update_scroll_canvas_text(self, status, color):
         try:
