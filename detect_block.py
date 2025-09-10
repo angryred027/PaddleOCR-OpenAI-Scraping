@@ -7,6 +7,7 @@ class BlockDetector:
         self.min_area = min_area
         self.logo_hist = logo_hist
         self.logo_size = logo_size  # (h, w)
+        self.thresh = None
 
     def detect_rectangles(self, image):
         """
@@ -17,6 +18,7 @@ class BlockDetector:
 
         # Threshold
         _, thresh = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY_INV)
+        self.thresh = thresh
         inverted = cv2.bitwise_not(thresh)
 
         tolerance = 5
@@ -106,13 +108,21 @@ class BlockDetector:
         for rect in top_rectangles:
             x, y, w, h = rect['coordinates']
             block_crop = image[y:y + h, x:x + w]
+            thresh = self.thresh
+            thresh_crop = thresh[y:y + h, x:x + w] # type: ignore
 
             has_logo, score = self.check_logo_in_block(block_crop)
+            text_blocks = []
 
             if has_logo:
                 color = (0, 0, 255)  # red if logo detected
                 text = f"Logo {score:.2f}"
                 detected.append(rect)
+                text_blocks = self.detect_text_blocks(thresh_crop)
+
+                for text_block in text_blocks:
+                    tx, ty, tw, th = text_block['coordinates']
+                    cv2.rectangle(result_image, (int(w * 0.4 + x + tx), y + ty), (int(w * 0.4 + x + tx + tw), y + ty + th), (255, 0, 0), 3)
             else:
                 color = (0, 255, 0)  # green if no logo
                 text = f"NoLogo {score:.2f}"
@@ -126,3 +136,26 @@ class BlockDetector:
             cv2.rectangle(result_image, (x, y), (x + w, y + h), (255,0,0), 3)
 
         return result_image, detected
+
+    def detect_text_blocks(self, image):
+        text_blocks = []
+        h, w = image.shape[:2]
+        x_start = int(w * 0.4)
+        cropped = image[:, x_start:w]
+        cv2.imwrite("cropped.png", cropped)
+
+        contours, _ = cv2.findContours(
+            cropped, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area >= 50 * 30:
+                x, y, w, h = cv2.boundingRect(contour)
+                text_blocks.append({
+                    'coordinates': (x, y, w, h),
+                    'area': area,
+                    'center': (x + w // 2, y + h // 2)
+                })
+        
+        return text_blocks

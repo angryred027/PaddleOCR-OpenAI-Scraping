@@ -1116,12 +1116,9 @@ class MainUI:
                 # print(self.detector.logo_hist)
 
                 # Schedule UI update on main thread
-                self.root.after(0, lambda: self.update_result_images(result_image))
+                self.root.after(50, lambda: self.update_result_images(result_image))
                   
                 self._process_pairing(original_image, headers, detected_blocks)
-
-                cv2.imwrite("original.png", original_image)
-
                 
         except Exception as e:
             print(f"Block detection error: {e}")
@@ -1159,7 +1156,7 @@ class MainUI:
                 hsh = self.get_hash(text)
                 return text, hsh
             except Exception as e:
-                print(f"ERRRRRRORRRRRRR: {e}")
+                print(f"Error during the text extraction: {e}")
                 import traceback
                 traceback.print_exc()  # This will show the full traceback
                 cv2.imwrite("error.png", crop_image)
