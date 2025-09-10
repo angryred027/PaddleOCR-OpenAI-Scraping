@@ -122,7 +122,7 @@ class BlockDetector:
 
                 for text_block in text_blocks:
                     tx, ty, tw, th = text_block['coordinates']
-                    cv2.rectangle(result_image, (int(w * 0.4 + x + tx), y + ty), (int(w * 0.4 + x + tx + tw), y + ty + th), (255, 0, 0), 3)
+                    cv2.rectangle(result_image, (x + tx, y + ty), (x + tx + tw, y + ty + th), (255, 0, 0), 3)
             else:
                 color = (0, 255, 0)  # green if no logo
                 text = f"NoLogo {score:.2f}"
@@ -138,6 +138,7 @@ class BlockDetector:
         return result_image, detected
 
     def detect_text_blocks(self, image):
+        # image should be row block image
         text_blocks = []
         h, w = image.shape[:2]
         x_start = int(w * 0.4)
@@ -151,11 +152,12 @@ class BlockDetector:
         for contour in contours:
             area = cv2.contourArea(contour)
             if area >= 50 * 30:
-                x, y, w, h = cv2.boundingRect(contour)
+                tx, ty, tw, th = cv2.boundingRect(contour)
+                x = x_start + tx
+                y = ty
                 text_blocks.append({
-                    'coordinates': (x, y, w, h),
+                    'coordinates': (x, y, tw, th),
                     'area': area,
-                    'center': (x + w // 2, y + h // 2)
                 })
         
         return text_blocks
