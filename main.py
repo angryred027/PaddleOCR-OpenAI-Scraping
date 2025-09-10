@@ -1155,15 +1155,12 @@ class MainUI:
 
     def _process_pairing(self, original_image, headers, blocks):
 
-        def _get_text(region, is_header=False):
+        def _get_header_text(region):
             
             x, y, w, h = region['coordinates']
             h_img, w_img = original_image.shape[:2]
-            if is_header:
-                w = int(w * 0.5)
-            else:
-                x = x + int(w * 0.4)
-                w = int(w * 0.6)
+            w = int(w * 0.5)
+
             x = max(0, min(x, w_img - 1))
             y = max(0, min(y, h_img - 1))
             w = max(1, min(w, w_img - x))
@@ -1173,8 +1170,9 @@ class MainUI:
             if crop_image.size == 0:
                 return "", None
             try:
-                text = extract_text.extract_block_data(crop_image)
-                hsh = self.get_hash(text)
+                pre = self._preprocess_odds_block_image(crop_image)
+                text = extract_text.extract_block_data(pre)
+                hsh = self.get_hash(text.upper())
                 return text, hsh
             except Exception as e:
                 print(f"Error during the text extraction: {e}")
@@ -1189,7 +1187,8 @@ class MainUI:
 
         # Filter new headers
         for header in headers:
-            h_text, h_hash = _get_text(header, True)
+            h_text, h_hash = _get_header_text(header)
+
             if not self.check_processed(h_hash):
                 header['text'] = h_text
                 current_new_headers.append(header)
@@ -1199,34 +1198,34 @@ class MainUI:
             block_image = self._crop_image(original_image, block)
             odds_blocks = self.detector.detect_odds_blocks(block_image)
 
+            text_concat = "" # for generating hash
+            odds = ""
+            count = 0
             for odds_block in odds_blocks:
                 odds_block_image = self._crop_image(block_image, odds_block) # type: ignore
                 preprocessed = self._preprocess_odds_block_image(odds_block_image)
                 odds_texts = extract_text.get_odds_data(preprocessed)
 
-                print(f"({odds_texts[0]}, {odds_texts[1]})")
+                odds += (f"({odds_texts[0]}, {odds_texts[1]})")
 
-            b_text, b_hash = _get_text(block, False)
+                count += 1
+                if count < len(odds_blocks):
+                    odds += ", "
+
+                text_concat += odds_texts[1]
+
+            b_hash = self.get_hash(text_concat)
+            b_text = odds
             if not self.check_processed(b_hash):
                 block['text'] = b_text
                 current_new_blocks.append(block)
 
-        if len(current_new_headers) == 0 and len(self.header_queue) == 0:
-            return
-        
         pairs = []
-
-        # First, pair with headers in queue
-        if len(self.header_queue) >= 1 and len(current_new_blocks) >= 1:
-            header = self.header_queue.popleft()
-            block = current_new_blocks.pop(0)  # take top-most block
-            pairs.append([header, block])
-            print(header['text'], ":", block['text'])
 
         # Pair remaining headers
         for header in current_new_headers:
             if len(current_new_blocks) == 0:
-                self.header_queue.append(header)
+                return 
             else:
                 block = current_new_blocks.pop(0)  # take top-most block
                 pairs.append([header, block])
