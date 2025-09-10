@@ -161,5 +161,5 @@ class BlockDetector:
                     'coordinates': (x, y, tw, th),
                     'area': area,
                 })
-        
+        odds_blocks.reverse()
         return odds_blocks

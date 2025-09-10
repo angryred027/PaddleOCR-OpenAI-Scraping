@@ -320,22 +320,20 @@ class MainUI:
         
         # ========== Create Treeview Table ==========
         # Define columns for the table
-        columns = ("id", "hash", "extracted_data", "header")
+        columns = ("id", "header", "odds")
         
         # Create the treeview widget (table)
         self.tree = ttk.Treeview(right_frame, columns=columns, show="headings")
         
         # Configure column headings
         self.tree.heading("id", text="ID")
-        self.tree.heading("hash", text="Hash")
-        self.tree.heading("extracted_data", text="Extracted Data")
         self.tree.heading("header", text="Header")
+        self.tree.heading("odds", text="Odds")
         
         # Configure column widths (adjusted for smaller window)
-        self.tree.column("id", width=30, anchor="center")
-        self.tree.column("hash", width=50, anchor="center")
-        self.tree.column("extracted_data", width=200, anchor="w")
+        self.tree.column("id", width=10, anchor="center")
         self.tree.column("header", width=100, anchor="w")
+        self.tree.column("odds", width=200, anchor="w")
         
         # Create scrollbars for the table
         v_scrollbar = ttk.Scrollbar(right_frame, orient="vertical", command=self.tree.yview)
@@ -1192,6 +1190,8 @@ class MainUI:
             if not self.check_processed(h_hash):
                 header['text'] = h_text
                 current_new_headers.append(header)
+            else:
+                print(f"{h_text}, {h_hash}")
 
         # Filter new blocks
         for block in blocks:
@@ -1219,18 +1219,19 @@ class MainUI:
             if not self.check_processed(b_hash):
                 block['text'] = b_text
                 current_new_blocks.append(block)
+            else:
+                print(f"{b_text}, {b_hash}")
 
         pairs = []
 
         # Pair remaining headers
         for header in current_new_headers:
-            if len(current_new_blocks) == 0:
-                return 
-            else:
-                block = current_new_blocks.pop(0)  # take top-most block
-                pairs.append([header, block])
-                print(header['text'], ":", block['text'])
-
+            for block in current_new_blocks:
+                if header['coordinates'][1] < block['coordinates'][1]:
+                    pairs.append([header, block])
+                    current_new_blocks.pop(0)
+                    print(header['text'], ":", block['text'])
+                    break
 
     def update_result_images(self, frame_bgr):
         """Update the detected_canvas with the latest processed frame without freezing UI."""
