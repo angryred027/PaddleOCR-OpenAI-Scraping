@@ -1120,7 +1120,7 @@ class MainUI:
                 block = blocks[0]
                 x, y, w, h = block['coordinates']
 
-                if h > 500 and x < 30:
+                if h > 500 and h < 800 and x < 30:
                     header = self.orphan_headers[0]
                     h_text = self._get_header_text(original_image, header)
                     first_block = self.orphan_blocks[0]
