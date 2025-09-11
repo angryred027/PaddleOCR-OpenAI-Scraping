@@ -56,6 +56,9 @@ class BlockDetector:
 
     def get_top_n(self, rectangles, n=10):
         return sorted(rectangles, key=lambda x: x['area'], reverse=True)[:n]
+    
+    def get_biggest_rectangle(self, rectangles):
+        return sorted(rectangles, key=lambda x: x['area'], reverse=True)[0]
 
     def check_logo_in_block(self, block_image, threshold=0.7):
         if self.logo_hist is None or self.logo_size is None or block_image is None or block_image.size == 0:

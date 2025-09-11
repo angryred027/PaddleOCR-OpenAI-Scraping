@@ -5,8 +5,8 @@ from datetime import datetime
 from PIL import Image, ImageTk
 import threading
 from tkinter import Menu
-import cv2
 import numpy as np
+import cv2
 import time
 import mss
 import queue
@@ -917,7 +917,12 @@ class MainUI:
             if frame_bgr is not None and self.logo is not None and self.logo_hist is not None and self.detector is not None:
                 blocks, headers, original_image = self.detector.detect_rectangles(frame_bgr)
                 top_10_rectangles = self.detector.get_top_n(blocks, 10)
-                _, _, _, h = top_10_rectangles[0]['coordinates']
+                
+                height = 0
+                if len(top_10_rectangles) >= 1:
+                    x, y, w, height = top_10_rectangles[0]['coordinates']
+                    print(f"{x}, {y}, {w}, {height}")
+
                 result_image, detected_blocks = self.detector.visualize_results(original_image, top_10_rectangles, headers)
 
                 try:
@@ -931,7 +936,7 @@ class MainUI:
                 
                 self.root.after(50, self.extract_team_names)
                 
-                self._process_pairing(original_image, headers, detected_blocks, h)
+                self._process_pairing(original_image, headers, detected_blocks, height)
 
         except Exception as e:
             print(f"Block detection error: {e}")
@@ -1091,81 +1096,98 @@ class MainUI:
     def _process_pairing(self, original_image, headers, blocks, block_height):
         num_headers = len(headers)
         num_blocks = len(blocks)
-        if block_height > 160 and block_height < 200:
+        orphan_headers_count = len(self.orphan_headers)
+        orphan_blocks_count = len(self.orphan_blocks)
+        
+        if 150 < block_height < 200:
             if len(self.orphan_headers) == 1 and num_blocks == 1:
                 header = self.orphan_headers[0]
                 block = blocks[0]
                 h_text = self._get_header_text(original_image, header)
                 b_text, b_odds = self._get_block_odds_text(original_image, block)
-                combined = h_text + b_text
-                normalize = self.normalize_text(b_odds)
-                hash = self.get_hash(normalize)
-                if not self.check_processed(hash):
-                    self.hash_values.add(hash)
+                normalized = self.normalize_text(b_odds)
+                hash_val = self.get_hash(normalized)
+                if not self.check_processed(hash_val):
+                    self.hash_values.add(hash_val)
                     self.insert_pair_to_treeview(h_text, b_text)
+                    self.orphan_headers.clear()
                 return
+                
             if num_headers == 1 and num_blocks == 0:
                 self.orphan_headers.append(headers[0])
                 return
-        if block_height > 300:
-
+        
+        if block_height > 200:
             if len(self.orphan_headers) == 0 and num_headers == 1:
-                self.orphan_headers.append(headers[0])
-
+                header = headers[0]
+                h_text = self._get_header_text(original_image, header)
+                print(f"{h_text}: added as orphan header")
+                header['text'] = h_text
+                self.orphan_headers.append(header)
+                
+                
                 if num_blocks == 1:
-                    self.orphan_blocks.append(blocks[0])
-                    return
-
-            if len(self.orphan_headers) == 1 and len(self.orphan_blocks) == 1 and num_blocks == 1:
+                    block = blocks[0]
+                    by, hy = block['coordinates'][1], header['coordinates'][1]
+                    print(f"{by}")
+                    if by > hy and by > 30:
+                        self.orphan_blocks.append(block)
+                        print("added as orphan block")
+                return
+            
+            print(f"{len(self.orphan_headers)} aaaaaaaaaaaaaaaaaa")
+            if len(self.orphan_headers) == 1 and num_blocks == 1:
                 block = blocks[0]
                 x, y, w, h = block['coordinates']
-
-                if h > 500 and h < 800 and x < 30:
-                    header = self.orphan_headers[0]
-                    h_text = self._get_header_text(original_image, header)
-                    first_block = self.orphan_blocks[0]
-                    last_block = blocks[0]
-                    str1 = self._get_block_odds_text(original_image, first_block)[0] + ", "
-                    str2 = self._get_block_odds_text(original_image, last_block)[0]
-                    str = str1 + str2
-                    normalized_text = self.normalize_2blocks_odds_string(str)
-                    self.insert_pair_to_treeview(h_text, normalized_text)
-                    self.orphan_headers.clear()
-                    self.orphan_blocks.clear()
                 
-            if block_height > 200 and len(self.orphan_blocks) == 0 and num_blocks == 1:
-                self.orphan_blocks.append(blocks[0])
-                return
+                if len(self.orphan_blocks) == 1:
+                    roi_height = self.roi_coordinates['height']
+                    print(f"{y+h}, {roi_height}")
+                    
+                    if h > 400 and (y + h) < roi_height - 30:
+                        print("2 data blocks are merged.")
+                        header = self.orphan_headers[0]
+                        print(f"aaaaa: {header['text']}")
+                        
+                        first_block = self.orphan_blocks[0]
+                        str1 = self._get_block_odds_text(original_image, first_block)[0]
+                        str2 = self._get_block_odds_text(original_image, block)[0]
+                        combined_str = f"{str1}, {str2}"
+                        
+                        self.insert_pair_to_treeview(header['text'], combined_str)
+                        self.orphan_headers.clear()
+                        self.orphan_blocks.clear()
+                        return
+                else:
+                    by = block['coordinates'][1]
+                    hy = self.orphan_headers[0]['coordinates'][1]
+                    print(f"{by}")
+                    if by > hy and by > 30:
+                        self.orphan_blocks.append(block)
+                        print("added as orphan block")
+                    return
         
-        headers_copy = list(headers)
-        blocks_copy = list(blocks)
-        
-        i = 0
-        while i < len(headers_copy):
-            header = headers_copy[i]
+        used_blocks = set()
+        for header in headers:
             hy = header['coordinates'][1]
-            matched = False
-            j = 0
-            while j < len(blocks_copy):
-                block = blocks_copy[j]
+            for i, block in enumerate(blocks):
+                if i in blocks:
+                    continue
+                    
                 by = block['coordinates'][1]
-                if hy < by:
+                if by > hy:
                     h_text = self._get_header_text(original_image, header)
                     b_text, b_odds = self._get_block_odds_text(original_image, block)
-                    combined = h_text + b_text
                     normalized = self.normalize_text(b_odds)
-                    hash = self.get_hash(normalized)
-                    if not self.check_processed(hash):
-                        self.hash_values.add(hash)
+                    hash_val = self.get_hash(normalized)
+                    
+                    if not self.check_processed(hash_val):
+                        self.hash_values.add(hash_val)
                         self.insert_pair_to_treeview(h_text, b_text)
-                    headers_copy.pop(i)
-                    blocks_copy.pop(j)
-                    matched = True
+                    
+                    used_blocks.add(i)
                     break
-                j += 1
-            if not matched:
-                i += 1
-                
+            
     def normalize_2blocks_odds_string(self, data): 
         if not data:
             return ""
