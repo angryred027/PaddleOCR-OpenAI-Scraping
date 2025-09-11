@@ -1134,6 +1134,7 @@ class MainUI:
                     print(f"last block has been added. {len(self.orphan_blocks)} {by}, {by + bh}, {self.roi_coordinates['height']}")
                     num = len(self.orphan_blocks)
                     if num >= 1:
+
                         first_block = self.orphan_blocks[num - 1]
                         last_block = block
                         print(f"2 blocks are merged.")
