@@ -1131,10 +1131,10 @@ class MainUI:
                     print(f"first block has been added. {by}, {by + bh}, {self.roi_coordinates['height']}")
                     return
                 elif by < 10 and by + bh < self.roi_coordinates['height'] - 10:
-                    print(f"last block has been added. {by}, {by + bh}, {self.roi_coordinates['height']}")
-
-                    if len(self.orphan_blocks) == 1:
-                        first_block = self.orphan_blocks[0]
+                    print(f"last block has been added. {len(self.orphan_blocks)} {by}, {by + bh}, {self.roi_coordinates['height']}")
+                    num = len(self.orphan_blocks)
+                    if num >= 1:
+                        first_block = self.orphan_blocks[num - 1]
                         last_block = block
                         print(f"2 blocks are merged.")
                         str1, _ = self._get_block_odds_text(original_image, first_block)
