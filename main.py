@@ -18,6 +18,7 @@ import gc
 import re
 import csv
 from openpyxl import Workbook
+from difflib import SequenceMatcher
 
 class ThreadSafeImage:
     def __init__(self):
@@ -93,7 +94,7 @@ class MainUI:
 
         self.original_image = None
         self.detected_image = None
-        
+
         self.orphan_blocks = deque(maxlen=2)
         
         self.api_key = tk.StringVar()
@@ -919,7 +920,6 @@ class MainUI:
                 height = 0
                 if len(top_10_rectangles) >= 1:
                     x, y, w, height = top_10_rectangles[0]['coordinates']
-                    print(f"{x}, {y}, {w}, {height}")
 
                 result_image, detected_blocks = self.detector.visualize_results(original_image, top_10_rectangles, headers)
 
@@ -1096,7 +1096,7 @@ class MainUI:
         num_blocks = len(blocks)
 
         if num_blocks >= 1:
-            block_height = blocks[0]['coordinates']['height']
+            block_height = blocks[0]['coordinates'][3]
         else:
             return
         
@@ -1125,24 +1125,28 @@ class MainUI:
 
                     if hy < by:
                         h_text = self._get_header_text(original_image, header)
-                else:
-                    if by > 10 and by + bh > self.roi_coordinates['height'] - 10:
-                        self.orphan_blocks.append(block)
-                        return
-                    elif by < 10 and by + bh < self.roi_coordinates['height'] - 10:
-                        if len(self.orphan_blocks) == 1:
-                            first_block = self.orphan_blocks[0]
-                            last_block = block
+                
+                if by > 10 and by + bh > self.roi_coordinates['height'] - 10:
+                    self.orphan_blocks.append(block)
+                    print(f"first block has been added. {by}, {by + bh}, {self.roi_coordinates['height']}")
+                    return
+                elif by < 10 and by + bh < self.roi_coordinates['height'] - 10:
+                    print(f"last block has been added. {by}, {by + bh}, {self.roi_coordinates['height']}")
 
-                            str1, _ = self._get_block_odds_text(original_image, first_block)
-                            str2, _ = self._get_block_odds_text(original_image, last_block)
+                    if len(self.orphan_blocks) == 1:
+                        first_block = self.orphan_blocks[0]
+                        last_block = block
+                        print(f"2 blocks are merged.")
+                        str1, _ = self._get_block_odds_text(original_image, first_block)
+                        str2, _ = self._get_block_odds_text(original_image, last_block)
 
-                            combined_str = f"{str1}, {str2}"
+                        combined_str = f"{str1}, {str2}"
+                        normalized = self.normalize_2blocks_odds_string(combined_str)
 
-                            self.insert_pair_to_treeview(h_text, combined_str)
-                            self.orphan_blocks.clear()
-                            return            
-
+                        self.insert_pair_to_treeview(h_text, combined_str)
+                        self.orphan_blocks.clear()
+                        return            
+                        
         used_blocks = set()
         for header in headers:
             hy = header['coordinates'][1]
@@ -1171,13 +1175,35 @@ class MainUI:
         entries = data_clean.split('),(')
         entries[0] = entries[0].lstrip('(')
         entries[-1] = entries[-1].rstrip(')')
-        seen = set()
+        seen_entries = []
         normalized = []
+        
         for entry in entries:
-            if entry not in seen:
-                seen.add(entry)
+            parts = entry.split(',', 1)
+            if len(parts) != 2:
+                continue
+            header = parts[0].strip()
+            odds_str = parts[1].strip()
+            try:
+                odds_val = float(odds_str)
+            except ValueError:
+                odds_val = odds_str
+            
+            is_duplicate = False
+            for seen_header, seen_odds in seen_entries:
+                header_similarity = SequenceMatcher(None, header, seen_header).ratio()
+                if isinstance(odds_val, float) and isinstance(seen_odds, float):
+                    odds_similar = abs(odds_val - seen_odds) < 0.01
+                else:
+                    odds_similar = odds_val == seen_odds
+                if header_similarity > 0.9 and odds_similar:
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                seen_entries.append((header, odds_val))
                 normalized.append(entry)
-
+        
         result = ', '.join(f'({e})' for e in normalized)
         return result
 
