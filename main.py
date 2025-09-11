@@ -93,8 +93,7 @@ class MainUI:
 
         self.original_image = None
         self.detected_image = None
-
-        self.orphan_headers = deque(maxlen=2)
+        
         self.orphan_blocks = deque(maxlen=2)
         
         self.api_key = tk.StringVar()
@@ -568,7 +567,6 @@ class MainUI:
             self.extract_team_names()
             self.current_id = 1
             self.hash_values.clear()
-            self.orphan_headers.clear()
             self.orphan_blocks.clear()
         
         elif self.is_running and not self.is_paused:
@@ -1096,77 +1094,55 @@ class MainUI:
     def _process_pairing(self, original_image, headers, blocks, block_height):
         num_headers = len(headers)
         num_blocks = len(blocks)
-        orphan_headers_count = len(self.orphan_headers)
-        orphan_blocks_count = len(self.orphan_blocks)
+
+        if num_blocks >= 1:
+            block_height = blocks[0]['coordinates']['height']
+        else:
+            return
         
         if 150 < block_height < 200:
-            if len(self.orphan_headers) == 1 and num_blocks == 1:
-                header = self.orphan_headers[0]
-                block = blocks[0]
-                h_text = self._get_header_text(original_image, header)
-                b_text, b_odds = self._get_block_odds_text(original_image, block)
+            if num_blocks >= 1: # medium block
+                b_text, b_odds = self._get_block_odds_text(original_image, blocks[0])
+                h_text = "Unknown"
+                if num_headers == 1:
+                    h_text = self._get_header_text(original_image, headers[0])
                 normalized = self.normalize_text(b_odds)
                 hash_val = self.get_hash(normalized)
+
                 if not self.check_processed(hash_val):
                     self.hash_values.add(hash_val)
                     self.insert_pair_to_treeview(h_text, b_text)
-                    self.orphan_headers.clear()
-                return
-                
-            if num_headers == 1 and num_blocks == 0:
-                self.orphan_headers.append(headers[0])
-                return
-        
-        if block_height > 200:
-            if len(self.orphan_headers) == 0 and num_headers == 1:
-                header = headers[0]
-                h_text = self._get_header_text(original_image, header)
-                print(f"{h_text}: added as orphan header")
-                header['text'] = h_text
-                self.orphan_headers.append(header)
-                
-                
-                if num_blocks == 1:
-                    block = blocks[0]
-                    by, hy = block['coordinates'][1], header['coordinates'][1]
-                    print(f"{by}")
-                    if by > hy and by > 30:
-                        self.orphan_blocks.append(block)
-                        print("added as orphan block")
-                return
-            
-            print(f"{len(self.orphan_headers)} aaaaaaaaaaaaaaaaaa")
-            if len(self.orphan_headers) == 1 and num_blocks == 1:
-                block = blocks[0]
-                x, y, w, h = block['coordinates']
-                
-                if len(self.orphan_blocks) == 1:
-                    roi_height = self.roi_coordinates['height']
-                    print(f"{y+h}, {roi_height}")
-                    
-                    if h > 400 and (y + h) < roi_height - 30:
-                        print("2 data blocks are merged.")
-                        header = self.orphan_headers[0]
-                        print(f"aaaaa: {header['text']}")
-                        
-                        first_block = self.orphan_blocks[0]
-                        str1 = self._get_block_odds_text(original_image, first_block)[0]
-                        str2 = self._get_block_odds_text(original_image, block)[0]
-                        combined_str = f"{str1}, {str2}"
-                        
-                        self.insert_pair_to_treeview(header['text'], combined_str)
-                        self.orphan_headers.clear()
-                        self.orphan_blocks.clear()
-                        return
-                else:
-                    by = block['coordinates'][1]
-                    hy = self.orphan_headers[0]['coordinates'][1]
-                    print(f"{by}")
-                    if by > hy and by > 30:
-                        self.orphan_blocks.append(block)
-                        print("added as orphan block")
                     return
         
+        if 400 < block_height:
+            if num_blocks == 1: # large block
+                block = blocks[0]
+                bx, by, bw, bh = block['coordinates']
+                h_text = "Unknown"
+                if num_headers >= 1: 
+                    header = headers[num_headers - 1]
+                    hy = header['coordinates'][1]
+
+                    if hy < by:
+                        h_text = self._get_header_text(original_image, header)
+                else:
+                    if by > 10 and by + bh > self.roi_coordinates['height'] - 10:
+                        self.orphan_blocks.append(block)
+                        return
+                    elif by < 10 and by + bh < self.roi_coordinates['height'] - 10:
+                        if len(self.orphan_blocks) == 1:
+                            first_block = self.orphan_blocks[0]
+                            last_block = block
+
+                            str1, _ = self._get_block_odds_text(original_image, first_block)
+                            str2, _ = self._get_block_odds_text(original_image, last_block)
+
+                            combined_str = f"{str1}, {str2}"
+
+                            self.insert_pair_to_treeview(h_text, combined_str)
+                            self.orphan_blocks.clear()
+                            return            
+
         used_blocks = set()
         for header in headers:
             hy = header['coordinates'][1]
