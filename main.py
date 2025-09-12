@@ -586,30 +586,42 @@ class MainUI:
             self.hash_values.clear()
             
     def export_csv(self):
-        columns = self.tree['columns']
+        columns = list(self.tree['columns'])
+        if columns and columns[0].lower() in ("id", "index", "#0"):
+            columns = columns[1:]
+        data_rows = []
+        for item_id in self.tree.get_children():
+            row = self.tree.item(item_id)['values']
+            if row:  
+                data_rows.append(row[1:])
+        transposed = list(zip(*data_rows))
         filename = self.current_team_names + "_" + self.date_time.get() + ".csv"
         safe_name = re.sub(r'[\\/:"*?<>|]+', '_', filename)
         with open(safe_name, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow(columns)
-
-            for item_id in self.tree.get_children():
-                row = self.tree.item(item_id)['values']
+            for row in zip(*transposed):
                 writer.writerow(row)
 
         messagebox.showinfo("Export", f"Data has been exported to CSV file: {safe_name}")
 
-        
     def export_excel(self):
-        wb = Workbook()
-        filename = self.current_team_names + "_" + self.date_time.get() + ".xlsx"
-        safe_name = re.sub(r'[\\/:"*?<>|]+', '_', filename)
-        ws = wb.active
-
-        columns = self.tree['columns']
-        ws.append(columns)
+        columns = list(self.tree['columns'])
+        if columns and columns[0].lower() in ("id", "index", "#0"):
+            columns = columns[1:]
+        data_rows = []
         for item_id in self.tree.get_children():
             row = self.tree.item(item_id)['values']
+            if row:
+                data_rows.append(row[1:])
+        transposed = list(zip(*data_rows))
+        filename = self.current_team_names + "_" + self.date_time.get() + ".xlsx"
+        safe_name = re.sub(r'[\\/:"*?<>|]+', '_', filename)
+
+        wb = Workbook()
+        ws = wb.active
+        ws.append(columns)
+        for row in zip(*transposed):
             ws.append(row)
 
         wb.save(safe_name)
@@ -1258,6 +1270,8 @@ class MainUI:
                 self.root.after(300, self.start_roi_preview)
                 self.root.after(300, self.start_scroll_detection)
 
+    def filter_headers(self):
+        
 
 def main():
     print("Starting Makcolik Odds Scraper...")
