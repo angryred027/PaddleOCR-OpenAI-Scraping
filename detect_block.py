@@ -99,7 +99,8 @@ class BlockDetector:
             
         result_image = image.copy()
         detected = []
-
+        
+        count = 0
         for rect in top_rectangles:
             x, y, w, h = rect['coordinates']
             
@@ -109,23 +110,31 @@ class BlockDetector:
             block_crop = image[y:y + h, x:x + w]
             has_logo, score = self.check_logo_in_block(block_crop)
 
-            if has_logo:
+            if has_logo:                
                 color = (0, 0, 255)
                 detected.append(rect)
                 odds_blocks = self.detect_odds_blocks(block_crop)
-
                 for odds_block in odds_blocks:
                     tx, ty, tw, th = odds_block['coordinates']
                     cv2.rectangle(result_image, (x + tx, y + ty), (x + tx + tw, y + ty + th), (255, 0, 0), 3)
+                    
             else:
                 color = (0, 255, 0)
 
             cv2.rectangle(result_image, (x, y), (x + w, y + h), color, 3)
+            if has_logo:
+                count += 1
+                cv2.putText(result_image, f"#{count}", (x, y - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,0), 2)
 
+        count = 0
         for header in headers:
+            count += 1
             x, y, w, h = header['coordinates']
             if x >= 0 and y >= 0 and x + w <= image.shape[1] and y + h <= image.shape[0]:
                 cv2.rectangle(result_image, (x, y), (x + w, y + h), (255, 0, 0), 3)
+                cv2.putText(result_image, f"#{count}", (x, y - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,0), 2)
 
         return result_image, detected
 

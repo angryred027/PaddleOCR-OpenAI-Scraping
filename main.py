@@ -19,6 +19,11 @@ import re
 import csv
 from openpyxl import Workbook
 from difflib import SequenceMatcher
+from fuzzywuzzy import fuzz
+from fuzzywuzzy import process
+from tkinter import filedialog
+import json
+import unicodedata
 
 class ThreadSafeImage:
     def __init__(self):
@@ -98,6 +103,7 @@ class MainUI:
         self.orphan_blocks = deque(maxlen=2)
         
         self.api_key = tk.StringVar()
+        self.headers = []
         self.scroll_value = tk.IntVar(value=5000)
         self.date_time = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d %H:%M"))
         self.team_name = tk.StringVar()
@@ -191,6 +197,10 @@ class MainUI:
         ttk.Button(roi_frame, text="Team ROI", 
                   command=self.select_team_roi).pack(side="left", padx=2, fill="x", expand=True)
         
+        ttk.Button(roi_frame, text="Load Headers", 
+                  style="success.TButton",
+                  command=self.load_headers).pack(side="left", padx=2, fill="x", expand=True)
+        
         api_frame = ttk.Frame(control_container)
         api_frame.pack(fill="x", pady=(0, 8))
         
@@ -281,7 +291,7 @@ class MainUI:
         self.tree.heading("header", text="Header")
         self.tree.heading("odds", text="Odds")
         
-        self.tree.column("id", width=10, anchor="center")
+        self.tree.column("id", width=20, anchor="center")
         self.tree.column("header", width=100, anchor="w")
         self.tree.column("odds", width=200, anchor="w")
         
@@ -442,6 +452,32 @@ class MainUI:
             self.roi_count += 1
             self.update_config_status()
         
+    def load_headers(self):
+        file_path = filedialog.askopenfilename(
+            title="Select Header JSON File",
+            filetypes=[("JSON files", "*.json")]
+        )
+
+        if file_path is None: 
+            return
+        
+        try:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                data = json.load(file)
+                if "headers" not in data:
+                    raise ValueError("The JSON file does not contain the expected 'headers' key.")
+                self.headers = data["headers"]
+                messagebox.showinfo("Success", f"Headers are loaded: {file_path}")
+
+        except FileNotFoundError:
+            messagebox.showerror("Error", f"File not found: {file_path}")
+        except json.JSONDecodeError:
+            messagebox.showerror("Error", f"Invalid JSON format in file: {file_path}")
+        except ValueError as ve:
+            messagebox.showerror("Error", str(ve))
+        except Exception as e:
+            messagebox.showerror("Error", f"An unexpected error occurred: {str(e)}")
+            
     def extract_team_names(self):
         if not (self.team_coordinates and self.team_coordinates['width'] > 0 and self.team_coordinates['height'] > 0):
             return False
@@ -927,13 +963,13 @@ class MainUI:
 
             if frame_bgr is not None and self.logo is not None and self.logo_hist is not None and self.detector is not None:
                 blocks, headers, original_image = self.detector.detect_rectangles(frame_bgr)
-                top_10_rectangles = self.detector.get_top_n(blocks, 10)
+                # top_10_rectangles = self.detector.get_top_n(blocks, 10)
                 
                 height = 0
-                if len(top_10_rectangles) >= 1:
-                    x, y, w, height = top_10_rectangles[0]['coordinates']
+                if len(blocks) >= 1:
+                    x, y, w, height = blocks[0]['coordinates']
 
-                result_image, detected_blocks = self.detector.visualize_results(original_image, top_10_rectangles, headers)
+                result_image, detected_blocks = self.detector.visualize_results(original_image, blocks, headers)
 
                 try:
                     self.result_image_queue.put_nowait(result_image)
@@ -1118,6 +1154,10 @@ class MainUI:
                 h_text = "Unknown"
                 if num_headers == 1:
                     h_text = self._get_header_text(original_image, headers[0])
+                    h_text = self.match_headers(h_text)
+                    if h_text is None:
+                        return
+
                 normalized = self.normalize_text(b_odds)
                 hash_val = self.get_hash(normalized)
 
@@ -1137,6 +1177,9 @@ class MainUI:
 
                     if hy < by:
                         h_text = self._get_header_text(original_image, header)
+                        h_text = self.match_headers(h_text)
+                        if h_text is None:
+                            return
                 
                 if by > 10 and by + bh > self.roi_coordinates['height'] - 10:
                     self.orphan_blocks.append(block)
@@ -1170,6 +1213,10 @@ class MainUI:
                 by = block['coordinates'][1]
                 if by > hy:
                     h_text = self._get_header_text(original_image, header)
+                    print(f"{h_text}")
+                    h_text = self.match_headers(h_text)
+                    if h_text is None:
+                        return
                     b_text, b_odds = self._get_block_odds_text(original_image, block)
                     normalized = self.normalize_text(b_odds)
                     hash_val = self.get_hash(normalized)
@@ -1270,9 +1317,37 @@ class MainUI:
                 self.root.after(300, self.start_roi_preview)
                 self.root.after(300, self.start_scroll_detection)
 
-    def filter_headers(self):
-        
+    def clean_turkish(self, text):
+        char_map = {
+            'i': 'ı',  # English 'i' to Turkish 'ı'
+            'C': 'Ç',  # English 'C' to Turkish 'Ç'
+            'q': 'ç',
+            '$': 'Ş',
+            'Q': 'Ç',
+        }
+        return ''.join(str(char_map.get(char, char)) for char in text)
 
+    def match_headers(self, extracted_text, threshold=70):
+        if len(self.headers) == 0:
+            return None
+
+        cleaned = self.clean_turkish(extracted_text)
+        normalized_headers = [self.normalize_unicode(header) for header in self.headers]
+
+        print(f"Cleaned:{cleaned}")
+        best_match = process.extractOne(cleaned, normalized_headers, scorer=fuzz.token_sort_ratio)
+        
+        if best_match and best_match[1] >= threshold:
+            print(f"Best match: {best_match[0]} with score {best_match[1]}")
+            return best_match[0]
+        else:
+            print(f"No match")
+            return None
+
+    def normalize_unicode(self, text):
+        text = unicodedata.normalize('NFC', text)
+        return self.clean_turkish(text)
+    
 def main():
     print("Starting Makcolik Odds Scraper...")
     
