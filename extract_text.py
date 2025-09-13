@@ -41,18 +41,16 @@ def extract_team_name(image):
             return [], ""
             
         texts = []
-        team_names = ""
         
         for line in result:
             if not line:
                 continue
             for word_info in line:
-                if len(word_info) >= 2 and word_info[1] and len(word_info[1]) >= 1:
+                if word_info[1] and len(word_info[1]) >= 1:
                     text = word_info[1][0]
-                    team_names += " " + text
                     texts.append(text)
 
-        return texts, team_names
+        return texts
     except Exception as e:
         print(f"Extract team name error: {e}")
         return [], ""

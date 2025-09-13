@@ -107,6 +107,7 @@ class MainUI:
         self.scroll_value = tk.IntVar(value=5000)
         self.date_time = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d %H:%M"))
         self.team_name = tk.StringVar()
+        self.match_score = tk.StringVar()
         self.status_text = tk.StringVar(value="Status: 0/3 ROI selected, ready to configure.")
         
         self._shutdown = False
@@ -230,6 +231,13 @@ class MainUI:
         self.team_entry.configure(style="Normal.TEntry")
         
         self.set_placeholder(self.team_entry, "Team Name")
+
+        self.match_score_entry = ttk.Entry(input_frame,
+                                    textvariable=self.match_score,
+                                    font=("Arial", 9))
+        self.match_score_entry.pack(side="left", fill="x", expand=True)
+        self.match_score_entry.configure(style="Normal.TEntry")
+        self.set_placeholder(self.match_score_entry, "Match Score")
         
         action_frame = ttk.Frame(control_container)
         action_frame.pack(fill="x", pady=(0, 8))
@@ -497,12 +505,17 @@ class MainUI:
                 self.team_name_image = cv2.cvtColor(team_name_image, cv2.COLOR_BGRA2RGB)
 
                 with self.ocr_lock:
-                    texts, team_name = extract_text.extract_team_name(self.team_name_image)
-                    if team_name and len(texts) >= 3:
-                        team_name = f"{texts[0]} vs {texts[2]}"
+                    texts = extract_text.extract_team_name(self.team_name_image)
+                    def __clean_text__(text):
+                        cleaned = re.findall(r'(\d+-\d+)', text.replace(" ", ""))
+                        return " | ".join(cleaned)
+                    if len(texts) == 4:
+                        team_name = f"{texts[1]} vs {texts[3]}"
+                        match_score = f"{__clean_text__(texts[2])} | {__clean_text__(texts[0])}"
                         if self.current_team_names != team_name:
                             self.team_name.set(team_name)
                             self.current_team_names = team_name
+                            self.match_score.set(match_score)
                             self.data_counter = 0
                             self.current_id = 1
                             self.hash_values.clear()
@@ -625,18 +638,43 @@ class MainUI:
         columns = list(self.tree['columns'])
         if columns and columns[0].lower() in ("id", "index", "#0"):
             columns = columns[1:]
+
+        headers = []
         data_rows = []
+
+        # Loop through each item in the treeview
         for item_id in self.tree.get_children():
             row = self.tree.item(item_id)['values']
-            if row:  
-                data_rows.append(row[1:])
-        transposed = list(zip(*data_rows))
+            if row:
+                header = row[1]  # Column 2: "Header"
+                odds = row[2]    # Column 3: "Odds"
+                
+                # Extract options and values using regex
+                odds_list = re.findall(r'\(([^,]+),\s*([^\)]+)\)', odds)
+                
+                # Create headers for each option
+                row_headers = [f"{header} ~ {option.strip()}" for option, _ in odds_list]
+                headers.extend(row_headers)  # Add them to headers
+
+                # Create the data row with odds values
+                row_data = [value.strip() for _, value in odds_list]
+                data_rows.append(row_data)  # Add the data row
+
+        # Ensure each row has the same number of columns (fill with empty values if needed)
+        max_columns = len(headers)
+        for row in data_rows:
+            while len(row) < max_columns:
+                row.append('')  # Fill missing values with an empty string
+
+        # Create a safe filename based on current team and datetime
         filename = self.current_team_names + "_" + self.date_time.get() + ".csv"
         safe_name = re.sub(r'[\\/:"*?<>|]+', '_', filename)
+
+        # Write the CSV file
         with open(safe_name, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(columns)
-            for row in zip(*transposed):
+            writer.writerow(headers)  # Write the headers as the first row
+            for row in data_rows:     # Write the data rows
                 writer.writerow(row)
 
         messagebox.showinfo("Export", f"Data has been exported to CSV file: {safe_name}")
