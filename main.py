@@ -17,7 +17,7 @@ from collections import deque
 import gc
 import re
 import csv
-from openpyxl import Workbook
+import openpyxl
 from difflib import SequenceMatcher
 from fuzzywuzzy import fuzz
 from fuzzywuzzy import process
@@ -47,6 +47,7 @@ class MainUI:
 
         self.current_id = 1
         self.current_team_names = ""
+        self.current_match_score = ""
         self.hash_values = set()
 
         self.mss_sct = None
@@ -516,6 +517,7 @@ class MainUI:
                             self.team_name.set(team_name)
                             self.current_team_names = team_name
                             self.match_score.set(match_score)
+                            self.current_match_score = match_score
                             self.data_counter = 0
                             self.current_id = 1
                             self.hash_values.clear()
@@ -639,67 +641,75 @@ class MainUI:
         if columns and columns[0].lower() in ("id", "index", "#0"):
             columns = columns[1:]
 
-        headers = []
+        headers = ['Takımlar', 'İlk Yarı Skoru | Mac Sonucu Skoru']
         data_rows = []
+        team_name = self.current_team_names
+        match_score = self.current_match_score
 
-        # Loop through each item in the treeview
+        count = 0
         for item_id in self.tree.get_children():
+            count += 1
             row = self.tree.item(item_id)['values']
             if row:
-                header = row[1]  # Column 2: "Header"
-                odds = row[2]    # Column 3: "Odds"
-                
-                # Extract options and values using regex
+                header = row[1]
+                odds = row[2]
                 odds_list = re.findall(r'\(([^,]+),\s*([^\)]+)\)', odds)
-                
-                # Create headers for each option
                 row_headers = [f"{header} ~ {option.strip()}" for option, _ in odds_list]
-                headers.extend(row_headers)  # Add them to headers
-
-                # Create the data row with odds values
-                row_data = [value.strip() for _, value in odds_list]
-                data_rows.append(row_data)  # Add the data row
-
-        # Ensure each row has the same number of columns (fill with empty values if needed)
-        max_columns = len(headers)
-        for row in data_rows:
-            while len(row) < max_columns:
-                row.append('')  # Fill missing values with an empty string
-
-        # Create a safe filename based on current team and datetime
-        filename = self.current_team_names + "_" + self.date_time.get() + ".csv"
-        safe_name = re.sub(r'[\\/:"*?<>|]+', '_', filename)
-
-        # Write the CSV file
-        with open(safe_name, 'w', newline='', encoding='utf-8') as f:
+                headers.extend(row_headers)
+                if count == 1:
+                    row_data = [team_name, match_score] + [value.strip() for _, value in odds_list]
+                else:
+                    row_data = [value.strip() for _, value in odds_list]
+                data_rows.append(row_data)
+        flattened_data = [value for sublist in data_rows for value in sublist]
+        filename = self.current_team_names + "_" + self.date_time.get()
+        safe_name_csv = re.sub(r'[\\/:"*?<>|]+', '_', filename) + ".csv"
+        with open(safe_name_csv, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(headers)  # Write the headers as the first row
-            for row in data_rows:     # Write the data rows
-                writer.writerow(row)
-
-        messagebox.showinfo("Export", f"Data has been exported to CSV file: {safe_name}")
+            writer.writerow(headers)
+            writer.writerow(flattened_data)
+        messagebox.showinfo("Export", f"Data has been exported to CSV file: {safe_name_csv}")
 
     def export_excel(self):
         columns = list(self.tree['columns'])
         if columns and columns[0].lower() in ("id", "index", "#0"):
             columns = columns[1:]
+
+        headers = ['Takımlar', 'İlk Yarı Skoru | Mac Sonucu Skoru']
         data_rows = []
+        team_name = self.current_team_names
+        match_score = self.current_match_score
+
+        count = 0
         for item_id in self.tree.get_children():
+            count += 1
             row = self.tree.item(item_id)['values']
             if row:
-                data_rows.append(row[1:])
-        transposed = list(zip(*data_rows))
-        filename = self.current_team_names + "_" + self.date_time.get() + ".xlsx"
-        safe_name = re.sub(r'[\\/:"*?<>|]+', '_', filename)
+                header = row[1]  # Column 2: "Header"
+                odds = row[2]    # Column 3: "Odds"
+                
+                odds_list = re.findall(r'\(([^,]+),\s*([^\)]+)\)', odds)
+                
+                row_headers = [f"{header} ~ {option.strip()}" for option, _ in odds_list]
+                headers.extend(row_headers)
 
-        wb = Workbook()
-        ws = wb.active
-        ws.append(columns)
-        for row in zip(*transposed):
-            ws.append(row)
-
-        wb.save(safe_name)
-        messagebox.showinfo("Export", f"Data has been exported to Excel file: {safe_name}")
+                if count == 1:
+                    row_data = [team_name, match_score] + [value.strip() for _, value in odds_list]
+                else:
+                    row_data = [value.strip() for _, value in odds_list]
+                data_rows.append(row_data)
+        flattened_data = [value for sublist in data_rows for value in sublist]
+        filename = self.current_team_names + "_" + self.date_time.get()
+        safe_name_excel = re.sub(r'[\\/:"*?<>|]+', '_', filename) + ".xlsx"
+        wb = openpyxl.Workbook()
+        sheet = wb.active
+        sheet.title = "Exported Data"
+        for col_num, header in enumerate(headers, start=1):
+            sheet.cell(row=1, column=col_num, value=header)
+        for col_num, value in enumerate(flattened_data, start=1):
+            sheet.cell(row=2, column=col_num, value=value)
+        wb.save(safe_name_excel)
+        messagebox.showinfo("Export", f"Data has been exported to Excel file: {safe_name_excel}")
         
     def on_double_click(self, event):
         selection = self.tree.selection()
