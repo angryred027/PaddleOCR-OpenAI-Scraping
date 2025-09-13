@@ -1382,7 +1382,11 @@ class MainUI:
             'Yari': 'Yarı',
             'yari': 'yarı',
             '$ans': 'şans',
-            'üst': 'Üst'
+            'üst': 'Üst',
+            'karsilikli': 'Karşılıklı',
+            'Araligi': 'Aralığı',
+            'Cift': 'Çift',
+            'Karsilikll': 'Karşılıklı'
         }
 
         for wrong, correct in corrections.items():
@@ -1400,24 +1404,27 @@ class MainUI:
         
         return text.lower()
 
-    def match_headers(self, extracted_text, threshold=70):
+    def match_headers(self, extracted_text, threshold=95):
         if len(self.headers) == 0:
             return None
 
         cleaned = self.clean_turkish(extracted_text)
+        corrected = self.apply_ocr_corrections(cleaned)
         normalized_headers = [self.normalize_unicode(header) for header in self.headers]
         extracted_numbers = re.findall(r'\d+(?:,\d+)?', cleaned)
+        print(f"Extracted text: {extracted_text}, Cleaned text: {cleaned}, Corrected text: {corrected}")
         if extracted_numbers:
             for header in normalized_headers:
                 header_numbers = re.findall(r'\d+(?:,\d+)?', header)
                 if extracted_numbers == header_numbers:
-                    remaining_text = re.sub(r'\d+(?:,\d+)?', '', cleaned).strip()
+                    remaining_text = re.sub(r'\d+(?:,\d+)?', '', corrected).strip()
                     header_text = re.sub(r'\d+(?:,\d+)?', '', header).strip()
 
                     best_match = process.extractOne(remaining_text, [header_text], scorer=fuzz.token_sort_ratio)
                     if best_match and best_match[1] >= threshold:
                         matched_index = normalized_headers.index(header)
                         original_header = self.headers[matched_index]
+                        print(f"Best match score: {best_match[1]}, Matched: {original_header}")
                         return original_header
                     similarity = SequenceMatcher(None, remaining_text, header_text).ratio() * 100
                     if similarity >= threshold:
@@ -1427,7 +1434,7 @@ class MainUI:
                     break
             else:
                 return None
-        best_match = process.extractOne(cleaned, normalized_headers, scorer=fuzz.token_sort_ratio)
+        best_match = process.extractOne(corrected, normalized_headers, scorer=fuzz.token_sort_ratio)
         
         if best_match and best_match[1] >= threshold:
             matched_index = normalized_headers.index(best_match[0])
@@ -1435,7 +1442,7 @@ class MainUI:
             return original_header
         for header in normalized_headers:
             header_text = re.sub(r'\d+(?:,\d+)?', '', header).strip()
-            similarity = SequenceMatcher(None, cleaned, header_text).ratio() * 100
+            similarity = SequenceMatcher(None, corrected, header_text).ratio() * 100
             if similarity >= threshold:
                 matched_index = normalized_headers.index(header)
                 original_header = self.headers[matched_index]
