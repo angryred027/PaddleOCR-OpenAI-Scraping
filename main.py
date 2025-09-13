@@ -1358,8 +1358,6 @@ class MainUI:
 
         cleaned = self.clean_turkish(extracted_text)
         normalized_headers = [self.normalize_unicode(header) for header in self.headers]
-
-        # If extracted text contains numbers, use number matching logic
         extracted_numbers = re.findall(r'\d+(?:,\d+)?', cleaned)
         if extracted_numbers:
             for header in normalized_headers:
@@ -1373,8 +1371,6 @@ class MainUI:
                         matched_index = normalized_headers.index(header)
                         original_header = self.headers[matched_index]
                         return original_header
-
-                    # Distance-based scoring for remaining text
                     similarity = SequenceMatcher(None, remaining_text, header_text).ratio() * 100
                     if similarity >= threshold:
                         matched_index = normalized_headers.index(header)
@@ -1383,16 +1379,12 @@ class MainUI:
                     break
             else:
                 return None
-
-        # If no numbers, directly match the cleaned text using fuzzy matching
         best_match = process.extractOne(cleaned, normalized_headers, scorer=fuzz.token_sort_ratio)
         
         if best_match and best_match[1] >= threshold:
             matched_index = normalized_headers.index(best_match[0])
             original_header = self.headers[matched_index]
             return original_header
-
-        # Fallback to distance-based similarity if fuzzy match is not good enough
         for header in normalized_headers:
             header_text = re.sub(r'\d+(?:,\d+)?', '', header).strip()
             similarity = SequenceMatcher(None, cleaned, header_text).ratio() * 100
