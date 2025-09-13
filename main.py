@@ -1317,15 +1317,40 @@ class MainUI:
                 self.root.after(300, self.start_roi_preview)
                 self.root.after(300, self.start_scroll_detection)
 
-    def clean_turkish(self, text):
-        char_map = {
-            'i': 'ı',  # English 'i' to Turkish 'ı'
-            'C': 'Ç',  # English 'C' to Turkish 'Ç'
-            'q': 'ç',
-            '$': 'Ş',
-            'Q': 'Ç',
+    def apply_ocr_corrections(self, text):
+        if not text:
+            return ""
+        corrections = {
+            'ılk': 'ilk',
+            'Ilk': 'İlk', 
+            'Mac': 'Maç',
+            'Maq': 'Maç',
+            'mac': 'maç',
+            'maq': 'maç',
+            'Sans': 'Şans',
+            'sans': 'şans',
+            'Cifte': 'Çifte',
+            'cifte': 'çifte',
+            'Yari': 'Yarı',
+            'yari': 'yarı',
+            '$ans': 'şans',
+            'üst': 'Üst'
         }
-        return ''.join(str(char_map.get(char, char)) for char in text)
+
+        for wrong, correct in corrections.items():
+            text = text.replace(wrong, correct)
+
+        return text
+
+    def clean_turkish(self, text):
+        if not text:
+            return ""
+        text = self.apply_ocr_corrections(text)
+
+        import re
+        text = re.sub(r'\s+', ' ', text.strip())
+        
+        return text.lower()
 
     def match_headers(self, extracted_text, threshold=70):
         if len(self.headers) == 0:
@@ -1334,15 +1359,49 @@ class MainUI:
         cleaned = self.clean_turkish(extracted_text)
         normalized_headers = [self.normalize_unicode(header) for header in self.headers]
 
-        print(f"Cleaned:{cleaned}")
+        # If extracted text contains numbers, use number matching logic
+        extracted_numbers = re.findall(r'\d+(?:,\d+)?', cleaned)
+        if extracted_numbers:
+            for header in normalized_headers:
+                header_numbers = re.findall(r'\d+(?:,\d+)?', header)
+                if extracted_numbers == header_numbers:
+                    remaining_text = re.sub(r'\d+(?:,\d+)?', '', cleaned).strip()
+                    header_text = re.sub(r'\d+(?:,\d+)?', '', header).strip()
+
+                    best_match = process.extractOne(remaining_text, [header_text], scorer=fuzz.token_sort_ratio)
+                    if best_match and best_match[1] >= threshold:
+                        matched_index = normalized_headers.index(header)
+                        original_header = self.headers[matched_index]
+                        return original_header
+
+                    # Distance-based scoring for remaining text
+                    similarity = SequenceMatcher(None, remaining_text, header_text).ratio() * 100
+                    if similarity >= threshold:
+                        matched_index = normalized_headers.index(header)
+                        original_header = self.headers[matched_index]
+                        return original_header
+                    break
+            else:
+                return None
+
+        # If no numbers, directly match the cleaned text using fuzzy matching
         best_match = process.extractOne(cleaned, normalized_headers, scorer=fuzz.token_sort_ratio)
         
         if best_match and best_match[1] >= threshold:
-            print(f"Best match: {best_match[0]} with score {best_match[1]}")
-            return best_match[0]
-        else:
-            print(f"No match")
-            return None
+            matched_index = normalized_headers.index(best_match[0])
+            original_header = self.headers[matched_index]
+            return original_header
+
+        # Fallback to distance-based similarity if fuzzy match is not good enough
+        for header in normalized_headers:
+            header_text = re.sub(r'\d+(?:,\d+)?', '', header).strip()
+            similarity = SequenceMatcher(None, cleaned, header_text).ratio() * 100
+            if similarity >= threshold:
+                matched_index = normalized_headers.index(header)
+                original_header = self.headers[matched_index]
+                return original_header
+
+        return None
 
     def normalize_unicode(self, text):
         text = unicodedata.normalize('NFC', text)
