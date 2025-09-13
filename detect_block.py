@@ -122,10 +122,6 @@ class BlockDetector:
                 color = (0, 255, 0)
 
             cv2.rectangle(result_image, (x, y), (x + w, y + h), color, 3)
-            if has_logo:
-                count += 1
-                cv2.putText(result_image, f"#{count}", (x, y - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,0), 2)
 
         count = 0
         for header in headers:
@@ -133,8 +129,6 @@ class BlockDetector:
             x, y, w, h = header['coordinates']
             if x >= 0 and y >= 0 and x + w <= image.shape[1] and y + h <= image.shape[0]:
                 cv2.rectangle(result_image, (x, y), (x + w, y + h), (255, 0, 0), 3)
-                cv2.putText(result_image, f"#{count}", (x, y - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,0), 2)
 
         return result_image, detected
 

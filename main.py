@@ -1412,7 +1412,6 @@ class MainUI:
         corrected = self.apply_ocr_corrections(cleaned)
         normalized_headers = [self.normalize_unicode(header) for header in self.headers]
         extracted_numbers = re.findall(r'\d+(?:,\d+)?', cleaned)
-        print(f"Extracted text: {extracted_text}, Cleaned text: {cleaned}, Corrected text: {corrected}")
         if extracted_numbers:
             for header in normalized_headers:
                 header_numbers = re.findall(r'\d+(?:,\d+)?', header)
@@ -1424,7 +1423,6 @@ class MainUI:
                     if best_match and best_match[1] >= threshold:
                         matched_index = normalized_headers.index(header)
                         original_header = self.headers[matched_index]
-                        print(f"Best match score: {best_match[1]}, Matched: {original_header}")
                         return original_header
                     similarity = SequenceMatcher(None, remaining_text, header_text).ratio() * 100
                     if similarity >= threshold:
