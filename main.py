@@ -23,6 +23,7 @@ from fuzzywuzzy import fuzz
 from fuzzywuzzy import process
 from tkinter import filedialog
 import json
+import random
 import unicodedata
 
 class ThreadSafeImage:
@@ -75,6 +76,7 @@ class MainUI:
         self.scroll_text_id = None
         
         self.block_detection_thread = None
+        self.first_original_image = None
         self.frame_processed = False
         self.block_detection_lock = threading.Lock()
         self.ocr_lock = threading.Lock()
@@ -106,6 +108,7 @@ class MainUI:
         
         self.api_key = tk.StringVar()
         self.headers = []
+        self.bet_options_order = []
         self.scroll_value = tk.IntVar(value=5000)
         self.date_time = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d %H:%M"))
         self.team_name = tk.StringVar()
@@ -495,6 +498,7 @@ class MainUI:
                 if "headers" not in data:
                     raise ValueError("The JSON file does not contain the expected 'headers' key.")
                 self.headers = data["headers"]
+                self.bet_options_order = data['bet_opts_order']
                 messagebox.showinfo("Success", f"Headers are loaded: {file_path}")
 
         except FileNotFoundError:
@@ -665,6 +669,7 @@ class MainUI:
             self.start_button.configure(text="Pause", style="warning.TButton")
             self.status_text.set("Status: Running - Scrolling detection...")
             self.extract_team_names()
+            self.extract_match_scores()
             self.current_id = 1
             self.hash_values.clear()
             self.orphan_blocks.clear()
@@ -681,6 +686,7 @@ class MainUI:
             self.start_button.configure(text="Pause", style="warning.TButton")
             self.status_text.set("Status: Running - Scrolling detection...")
             self.extract_team_names()
+            self.extract_match_scores()
             self.current_id = 1
             self.hash_values.clear()
             
@@ -798,6 +804,10 @@ class MainUI:
         
         button_frame = ttk.Frame(edit_window)
         button_frame.pack(pady=10)
+
+        def handle_enter(event):
+            text_widget.insert(tk.INSERT, '\n')
+            return "break"
         
         def save_edit():
             new_value = text_widget.get("1.0", "end-1c")
@@ -820,7 +830,6 @@ class MainUI:
             return "break"
         
         text_widget.bind("<Control-Return>", on_ctrl_enter)
-        text_widget.bind("<Command-Return>", on_ctrl_enter)
         edit_window.bind("<Escape>", on_escape)
         
         instruction_frame = ttk.Frame(edit_window)
@@ -1077,6 +1086,7 @@ class MainUI:
                         pass
                 
                 self.root.after(50, self.extract_team_names)
+                self.root.after(50, self.extract_match_scores)
                 
                 self._process_pairing(original_image, headers, detected_blocks, height)
 
@@ -1207,7 +1217,6 @@ class MainUI:
                     odds += "\n"
 
             text_concat += odds_texts[1]
-
         return odds, text_concat
 
     def _get_header_text(self, original_image, region):
@@ -1279,6 +1288,7 @@ class MainUI:
                 
                 if by > 10 and by + bh > self.roi_coordinates['height'] - 10:
                     self.orphan_blocks.append(block)
+                    self.first_original_image = original_image
                     print(f"first block has been added. {by}, {by + bh}, {self.roi_coordinates['height']}")
                     return
                 elif by < 10 and by + bh < self.roi_coordinates['height'] - 10:
@@ -1289,13 +1299,13 @@ class MainUI:
                         first_block = self.orphan_blocks[num - 1]
                         last_block = block
                         print(f"2 blocks are merged.")
-                        str1, _ = self._get_block_odds_text(original_image, first_block)
+                        str1, _ = self._get_block_odds_text(self.first_original_image, first_block)
                         str2, _ = self._get_block_odds_text(original_image, last_block)
 
                         combined_str = f"{str1}, {str2}"
-                        normalized = self.normalize_2blocks_odds_string(combined_str)
-
-                        self.insert_pair_to_treeview(h_text, combined_str)
+                        normalized = self.sort_bet_options(combined_str)
+                        
+                        self.insert_pair_to_treeview(h_text, normalized)
                         self.orphan_blocks.clear()
                         return            
                         
@@ -1307,6 +1317,7 @@ class MainUI:
                     continue
                     
                 by = block['coordinates'][1]
+
                 if by > hy:
                     h_text = self._get_header_text(original_image, header)
                     print(f"{h_text}")
@@ -1324,45 +1335,6 @@ class MainUI:
                     used_blocks.add(i)
                     break
             
-    def normalize_2blocks_odds_string(self, data): 
-        if not data:
-            return ""
-        data_clean = re.sub(r'\s+', '', data)
-        entries = data_clean.split('),(')
-        entries[0] = entries[0].lstrip('(')
-        entries[-1] = entries[-1].rstrip(')')
-        seen_entries = []
-        normalized = []
-        
-        for entry in entries:
-            parts = entry.split(',', 1)
-            if len(parts) != 2:
-                continue
-            header = parts[0].strip()
-            odds_str = parts[1].strip()
-            try:
-                odds_val = float(odds_str)
-            except ValueError:
-                odds_val = odds_str
-            
-            is_duplicate = False
-            for seen_header, seen_odds in seen_entries:
-                header_similarity = SequenceMatcher(None, header, seen_header).ratio()
-                if isinstance(odds_val, float) and isinstance(seen_odds, float):
-                    odds_similar = abs(odds_val - seen_odds) < 0.01
-                else:
-                    odds_similar = odds_val == seen_odds
-                if header_similarity > 0.9 and odds_similar:
-                    is_duplicate = True
-                    break
-            
-            if not is_duplicate:
-                seen_entries.append((header, odds_val))
-                normalized.append(entry)
-        
-        result = ', '.join(f'({e})' for e in normalized)
-        return result
-
     def insert_pair_to_treeview(self, header_text, odds_text):
         if not self._shutdown:
             self.root.after(0, lambda: self._insert_pair(header_text, odds_text))
@@ -1436,7 +1408,9 @@ class MainUI:
             'Cift': 'Çift',
             'Karsilikll': 'Karşılıklı',
             'Us0': 'Üst',
-            'Ost': 'Üst'
+            'Ost': 'Üst',
+            'ilk': 'İlk',
+            '1lk': 'İlk',
         }
 
         for wrong, correct in corrections.items():
@@ -1502,6 +1476,26 @@ class MainUI:
         text = unicodedata.normalize('NFC', text)
         return self.clean_turkish(text)
     
+    def sort_bet_options(self, odds_text):
+        pattern = r'\(([^,]+),\s*([\d.]+)\)'
+        matches = re.findall(pattern, odds_text)
+
+        data_dict = {}
+        for match in matches:
+            key = re.sub(r'\s+', ' ', match[0].strip().replace('/', ' / '))
+            if key != "- / -":
+                data_dict[key] = float(match[1])
+
+        sorted_data = []
+        for bet_key in self.bet_options_order:
+            if bet_key in data_dict:
+                sorted_data.append((bet_key, data_dict[bet_key]))
+
+        sorted_odds = ', '.join(f"({k}, {v:.2f})" for k, v in sorted_data)
+        print(f"Sorted odds: {len(sorted_data)}")
+        return sorted_odds
+
+
 def main():
     print("Starting Makcolik Odds Scraper...")
     
