@@ -65,6 +65,7 @@ class MainUI:
         self.roi_coordinates = None
         self.logo_coordinates = None
         self.team_coordinates = None
+        self.score_coordinates = None
 
         self.scroll_detection_running = False
         self.scroll_thread = None
@@ -109,7 +110,7 @@ class MainUI:
         self.date_time = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d %H:%M"))
         self.team_name = tk.StringVar()
         self.match_score = tk.StringVar()
-        self.status_text = tk.StringVar(value="Status: 0/3 ROI selected, ready to configure.")
+        self.status_text = tk.StringVar(value="Status: 0/4 ROI selected, ready to configure.")
         
         self._shutdown = False
         
@@ -199,6 +200,10 @@ class MainUI:
         ttk.Button(roi_frame, text="Team ROI", 
                   command=self.select_team_roi).pack(side="left", padx=2, fill="x", expand=True)
         
+        ttk.Button(roi_frame, text="Score ROI", 
+                  style="success.TButton",
+                  command=self.select_score_roi).pack(side="left", padx=2, fill="x", expand=True)
+        
         ttk.Button(roi_frame, text="Load Headers", 
                   style="success.TButton",
                   command=self.load_headers).pack(side="left", padx=2, fill="x", expand=True)
@@ -271,15 +276,21 @@ class MainUI:
         config_count = sum([
             self.roi_coordinates is not None,
             self.logo_coordinates is not None,
-            self.team_coordinates is not None
+            self.team_coordinates is not None,
+            self.score_coordinates is not None
         ])
 
-        status_text = f"ROIs: {config_count}/3 configured."
-        color = "green" if config_count == 3 else "orange" if config_count == 2 else "red"
+        status_text = f"ROIs: {config_count}/4 configured."
+        color = (
+            "green" if config_count == 4
+            else "orange" if config_count == 3
+            else "yellow" if config_count == 2
+            else "red"
+        )
 
         self.status_text.set(status_text)
 
-        if config_count == 3:
+        if config_count == 4:
             self.start_button.state(["!disabled"])
             self.status_label.configure(foreground="green")
         else:
@@ -461,6 +472,14 @@ class MainUI:
             self.roi_count += 1
             self.update_config_status()
         
+    def select_score_roi(self):
+        self.score_coordinates = self.create_roi_selector("Select Score Region")
+        if self.extract_match_scores():
+            self.roi_count += 1
+            self.update_config_status()
+            status_text = self.status_text.get()
+            self.status_text.set(status_text + " Score ROI selected.")
+
     def load_headers(self):
         file_path = filedialog.askopenfilename(
             title="Select Header JSON File",
@@ -510,14 +529,11 @@ class MainUI:
                     def __clean_text__(text):
                         cleaned = re.findall(r'(\d+-\d+)', text.replace(" ", ""))
                         return " | ".join(cleaned)
-                    if len(texts) == 4:
-                        team_name = f"{texts[1]} vs {texts[3]}"
-                        match_score = f"{__clean_text__(texts[2])} | {__clean_text__(texts[0])}"
+                    if len(texts) == 3:
+                        team_name = f"{texts[0]} vs {texts[2]}"
                         if self.current_team_names != team_name:
                             self.team_name.set(team_name)
                             self.current_team_names = team_name
-                            self.match_score.set(match_score)
-                            self.current_match_score = match_score
                             self.data_counter = 0
                             self.current_id = 1
                             self.hash_values.clear()
@@ -527,6 +543,38 @@ class MainUI:
                         return True
         except Exception as e:
             print(f"Team name extraction error: {e}")
+        return False
+
+    def extract_match_scores(self):
+        if not (self.score_coordinates and self.score_coordinates['width'] > 0 and self.score_coordinates['height'] > 0):
+            return False
+            
+        coords = self.score_coordinates
+        self.team_roi_monitor = {
+            "top": int(coords["y1"]),
+            "left": int(coords["x1"]),
+            "width": int(coords["x2"] - coords["x1"]),
+            "height": int(coords["y2"] - coords["y1"])
+        }
+        
+        try:
+            with mss.mss() as sct:
+                sct_img = sct.grab(self.team_roi_monitor)
+                match_scores_image = np.array(sct_img)
+                self.match_scores_image = cv2.cvtColor(match_scores_image, cv2.COLOR_BGRA2RGB)
+
+                with self.ocr_lock:
+                    text = extract_text.extract_score_data(self.match_scores_image)
+                    def __clean_text__(text):
+                        cleaned = re.findall(r'(\d+-\d+)', text.replace(" ", ""))
+                        return " | ".join(cleaned)
+                    if len(text) >= 6:
+                        match_score = f"{__clean_text__(text)}"
+                        self.current_match_score = match_score
+                        self.match_score.set(self.current_match_score)
+                        return True
+        except Exception as e:
+            print(f"Match scores extraction error: {e}")
         return False
 
     def create_roi_selector(self, title="Select Region"):
@@ -1386,7 +1434,9 @@ class MainUI:
             'karsilikli': 'Karşılıklı',
             'Araligi': 'Aralığı',
             'Cift': 'Çift',
-            'Karsilikll': 'Karşılıklı'
+            'Karsilikll': 'Karşılıklı',
+            'Us0': 'Üst',
+            'Ost': 'Üst'
         }
 
         for wrong, correct in corrections.items():

@@ -1,8 +1,9 @@
-from paddleocr import PaddleOCR
+from paddleocr import PaddleOCR, draw_ocr
 import re
 import cv2
 import random
 import threading
+from PIL import Image
 
 pattern = re.compile(r'^\d+\.\d{2}$')
 _ocr_instance = None
@@ -55,6 +56,30 @@ def extract_team_name(image):
         print(f"Extract team name error: {e}")
         return [], ""
 
+def extract_score_data(score_image):
+    if score_image is None or score_image.size == 0:
+        return ""
+        
+    try:
+        ocr = get_ocr()
+        result = ocr.ocr(score_image)
+
+        if not result or not result[0]:
+            return ""
+
+        texts = []
+        for line in result[0]:
+            if not line:
+                continue
+            if len(line) >= 2 and line[1] and len(line[1]) >= 1:
+                text = line[1][0] 
+                texts.append(text)
+
+        return "".join(texts)
+    except Exception as e:
+        print(f"Extract score data error: {e}")
+        return ""
+    
 def extract_block_data(block_image):
     if block_image is None or block_image.size == 0:
         return ""
