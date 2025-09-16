@@ -1304,7 +1304,6 @@ class MainUI:
 
                         combined_str = f"{str1}, {str2}"
                         normalized = self.sort_bet_options(combined_str)
-                        
                         self.insert_pair_to_treeview(h_text, normalized)
                         self.orphan_blocks.clear()
                         return            
@@ -1390,6 +1389,8 @@ class MainUI:
             return ""
         corrections = {
             'ılk': 'ilk',
+            '1lk': 'İlk',
+            'ilk': 'İlk',
             'Ilk': 'İlk', 
             'Mac': 'Maç',
             'Maq': 'Maç',
@@ -1398,19 +1399,19 @@ class MainUI:
             'Sans': 'Şans',
             'sans': 'şans',
             'Cifte': 'Çifte',
+            'Cift': 'Çift',
             'cifte': 'çifte',
             'Yari': 'Yarı',
+            'Yarl': 'Yarı',
             'yari': 'yarı',
             '$ans': 'şans',
-            'üst': 'Üst',
             'karsilikli': 'Karşılıklı',
             'Araligi': 'Aralığı',
-            'Cift': 'Çift',
             'Karsilikll': 'Karşılıklı',
+            'üst': 'Üst',
             'Us0': 'Üst',
             'Ost': 'Üst',
-            'ilk': 'İlk',
-            '1lk': 'İlk',
+            '0st': 'Üst',
         }
 
         for wrong, correct in corrections.items():
