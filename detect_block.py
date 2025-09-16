@@ -1,7 +1,6 @@
 import cv2
 import numpy as np
 
-
 class BlockDetector:
     def __init__(self, min_area=10000, logo_hist=None, logo_size=None):
         self.min_area = min_area
