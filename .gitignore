@@ -2,3 +2,13 @@
 *.png
 
 /venv/
+/test_images/*
+/resource/*
+
+__pycache__
+
+/dist
+
+/build
+
+/resource

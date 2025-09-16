@@ -1,0 +1,26 @@
+{
+    "headers": [
+        "Maç Sonucu",
+        "Çifte Şans",
+        "MS ve 1,5 Alt/Üst",
+        "MS ve 2,5 Alt/Üst",
+        "MS ve 3,5 Alt/Üst",
+        "MS ve Karşılıklı Gol",
+        "1. Yarı Sonucu",
+        "1. Yarı Çifte Şans",
+        "0,5 Alt/Üst",
+        "1,5 Alt/Üst",
+        "2,5 Alt/Üst",
+        "3,5 Alt/Üst",
+        "1.Yarı 0,5 Alt/Üst",
+        "1.Yarı 1,5 Alt/Üst",
+        "1.Yarı 2,5 Alt/Üst",
+        "1.Yarı Karşılıklı Gol",
+        "Karşılıklı Gol",
+        "Toplam Gol Aralığı",
+        "Tek/Çift",
+        "Toplam Korner Aralığı",
+        "1. Yarı Korner Aralığı",
+        "İlk Yarı / Maç Skoru"
+    ]
+}

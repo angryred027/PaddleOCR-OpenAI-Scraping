@@ -1,314 +1,583 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog, colorchooser
+from tkinter import ttk, messagebox
 import ttkbootstrap as tb
-import cv2
-import re
-import pandas as pd
-from paddleocr import PaddleOCR
+from datetime import datetime
 from PIL import Image, ImageTk
-import mss
-import numpy as np
 import threading
+from tkinter import Menu
+import numpy as np
+import cv2
 import time
+import mss
+import queue
+from detect_block import BlockDetector
+import extract_text
 import hashlib
 from collections import deque
-from datetime import datetime
+import gc
+import re
+import csv
+import openpyxl
+from difflib import SequenceMatcher
+from fuzzywuzzy import fuzz
+from fuzzywuzzy import process
+from tkinter import filedialog
 import json
+import unicodedata
 
-class NESINEOddsScraper:
+class ThreadSafeImage:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._image = None
+    
+    def set(self, image):
+        with self._lock:
+            self._image = image
+    
+    def get(self):
+        with self._lock:
+            return self._image
+
+class MainUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("NESINE Odds Scraper - Divider-First Block Detection")
-        self.root.geometry("800x600")
-        self.root.minsize(800, 600)
+        self.root.title("MAKCOLIK SCRAPER v1.0")
+        self.root.geometry("1050x700")
+        self.root.minsize(1050, 700)
+
+        self.current_id = 1
+        self.current_team_names = ""
+        self.current_match_score = ""
+        self.hash_values = set()
+
+        self.mss_sct = None
+        self.roi_preview_running = False
+        self.preview_thread = None
+        self.image_queue = queue.Queue(maxsize=2)
+        self.result_image_queue = queue.Queue(maxsize=2)
+        
+        self.original_photo = None
+        self.detected_photo = None
+        self.original_canvas_image = None
+        self.detected_canvas_image = None
+        
+        self.roi_monitor = None
+        self.roi_coordinates = None
+        self.logo_coordinates = None
+        self.team_coordinates = None
+        self.score_coordinates = None
+
+        self.scroll_detection_running = False
+        self.scroll_thread = None
+        self.prev_frame = None
+        self.current_scroll_state = "Unknown"
+        self.scroll_threshold = 5000
+        self.scroll_text_id = None
+        
+        self.block_detection_thread = None
+        self.frame_processed = False
+        self.block_detection_lock = threading.Lock()
+        self.ocr_lock = threading.Lock()
+        self.ui_lock = threading.Lock()
+
+        self.logo = None
+        self.logo_monitor = None
+        self.logo_hist = None
+        
+        self.detector = None
+        
+        self.safe_original_image = ThreadSafeImage()
+        self.safe_detected_image = ThreadSafeImage()
         
         tb.Style("darkly")
         
-        # ========== Core State ==========
-        self.running = threading.Event()
-        self.stop_flag = False
-        self.odds_data = []
-        self.roi = None
-        self.team_roi = None
-        self.nesine_logo_roi = None
-        self.divider_color = None
-        self.detected_hashes = deque(maxlen=1000)
+        self.is_running = False
+        self.is_paused = False
+        self.roi_count = 0
+        self.data_counter = 0
+
+        self.selecting_roi = False
+        self.current_selection_type = None
+
+        self.original_image = None
+        self.detected_image = None
+
+        self.orphan_blocks = deque(maxlen=2)
         
-        # ========== Block Detection State ==========
-        self.partial_blocks = {}  # Store partial blocks across frames
-        self.frame_sequence = 0
-        self.divider_tolerance = 15  # Color tolerance for divider detection
-        self.min_divider_length = 50  # Minimum divider line length
+        self.api_key = tk.StringVar()
+        self.headers = []
+        self.scroll_value = tk.IntVar(value=5000)
+        self.date_time = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d %H:%M"))
+        self.team_name = tk.StringVar()
+        self.match_score = tk.StringVar()
+        self.status_text = tk.StringVar(value="Status: 0/4 ROI selected, ready to configure.")
         
-        # ========== UI Variables ==========
-        self.status_text = tk.StringVar(value="Ready - Configure ROIs and divider color")
-        self.fps = tk.IntVar(value=10)
-        self.use_gpu = tk.BooleanVar(value=False)
-        self.apply_threshold = tk.BooleanVar(value=True)
-        self.detection_sensitivity = tk.DoubleVar(value=0.75)
-        self.manual_date = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d %H:%M"))
-        
-        # ========== OCR Setup ==========
-        self.ocr = PaddleOCR(
-            use_angle_cls=True,
-            lang='tr',
-            use_gpu=False,
-            show_log=False,
-            rec_algorithm='CRNN',
-            det_algorithm='DB'
-        )
-        
-        # ========== Preview State ==========
-        self.current_frame = None
-        self.preview_frame = None
-        self.detected_blocks_visual = []
-        self.frame_counter = 0
-        self.processing_times = deque(maxlen=10)
+        self._shutdown = False
         
         self.setup_ui()
+        self.update_preview_images()
+        self.update_result_images_from_queue()
         
     def setup_ui(self):
-        """Setup compact UI with large tree view as main panel"""
-        # Configure grid weights - main focus on tree view
-        self.root.grid_rowconfigure(0, weight=2)  # Top row with controls/preview
-        self.root.grid_rowconfigure(1, weight=3)  # Bottom row with tree view (main)
+        self.root.grid_rowconfigure(0, weight=4)
+        self.root.grid_rowconfigure(1, weight=0)
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_columnconfigure(1, weight=1)
         
-        # ========== Top Left: Preview Panel ==========
-        self.setup_preview_panel()
-        
-        # ========== Top Right: Controls Panel ==========
-        self.setup_control_panel()
-        
-        # ========== Bottom: Main Data Table (Full Width) ==========
-        self.setup_data_panel()
+        self.setup_left_panel()
+        self.setup_right_panel()
+        self.setup_bottom_panel()
         
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         
-    def setup_preview_panel(self):
-        """Setup compact preview panel - Samsung Flow A55 aspect ratio"""
-        preview_frame = ttk.LabelFrame(self.root, text="Live Preview", padding=3)
-        preview_frame.grid(row=0, column=0, sticky="nsew", padx=3, pady=3)
-        preview_frame.grid_rowconfigure(0, weight=1)
-        preview_frame.grid_columnconfigure(0, weight=1)
+    def setup_left_panel(self):
+        left_frame = ttk.Frame(self.root)
+        left_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        left_frame.grid_rowconfigure(0, weight=1)
+        left_frame.grid_rowconfigure(1, weight=0)
+        left_frame.grid_columnconfigure(0, weight=1)
         
-        # Samsung Flow A55 aspect ratio (roughly 9:19.5, but we'll use 9:18 for better fit)
-        # Width: 270px, Height: 540px (keeping under 300px width as requested)
-        self.preview_canvas = tk.Canvas(preview_frame, bg="black", width=270, height=540)
-        self.preview_canvas.grid(row=0, column=0, sticky="nsew")
+        self.setup_preview_section(left_frame)
+        self.setup_control_section(left_frame)
         
-        # Preview label
-        self.preview_label = ttk.Label(self.preview_canvas, text="Configure ROIs to start", 
-                                     anchor="center", background="black", foreground="white")
-        self.canvas_window = self.preview_canvas.create_window(135, 270, window=self.preview_label)
+    def setup_preview_section(self, parent):
+        preview_container = ttk.Frame(parent)
+        preview_container.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        preview_container.grid_columnconfigure(0, weight=1)
+        preview_container.grid_columnconfigure(1, weight=1)
+        preview_container.grid_rowconfigure(0, weight=1)
         
-    def setup_control_panel(self):
-        """Setup compact control panel"""
-        control_main = ttk.Frame(self.root)
-        control_main.grid(row=0, column=1, sticky="nsew", padx=3, pady=3)
-        control_main.grid_rowconfigure(6, weight=1)  # Make last frame expandable
-        control_main.grid_columnconfigure(0, weight=1)
+        original_frame = ttk.LabelFrame(preview_container, text="Original", padding=10)
+        original_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        original_frame.grid_rowconfigure(0, weight=1)
+        original_frame.grid_columnconfigure(0, weight=1)
         
-        # ========== ROI Configuration ==========
-        roi_frame = ttk.LabelFrame(control_main, text="ROI Configuration", padding=3)
-        roi_frame.grid(row=0, column=0, sticky="ew", pady=(0, 2))
-        roi_frame.grid_columnconfigure((0, 1), weight=1)
+        self.original_canvas = tk.Canvas(original_frame, bg="black", width=270, height=540)
+        self.original_canvas.grid(row=0, column=0, sticky="nsew")
         
-        ttk.Button(roi_frame, text="Data ROI", command=self.select_roi, 
-                  style="primary.TButton").grid(row=0, column=0, sticky="ew", padx=(0, 1))
-        ttk.Button(roi_frame, text="Team ROI", command=self.select_team_roi).grid(
-            row=0, column=1, sticky="ew", padx=(1, 0))
+        self.original_canvas_image = self.original_canvas.create_image(135, 200, anchor="center")
+        self.scroll_text_id = self.original_canvas.create_text(0, 0, 
+                                                      text="", 
+                                                      anchor="nw", 
+                                                      fill="yellow",
+                                                      font=("Arial", 10, "bold"))
+        self.original_placeholder = self.original_canvas.create_text(135, 200, 
+                                                                   text="ROI Preview\nWill Show Here", 
+                                                                   fill="gray", 
+                                                                   font=("Arial", 12),
+                                                                   anchor="center")
         
-        ttk.Button(roi_frame, text="Logo ROI", command=self.select_logo_roi).grid(
-            row=1, column=0, sticky="ew", padx=(0, 1), pady=1)
-        ttk.Button(roi_frame, text="Divider Color", command=self.pick_divider_color).grid(
-            row=1, column=1, sticky="ew", padx=(1, 0), pady=1)
+        detected_frame = ttk.LabelFrame(preview_container, text="Detected", padding=10)
+        detected_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
+        detected_frame.grid_rowconfigure(0, weight=1)
+        detected_frame.grid_columnconfigure(0, weight=1)
         
-        self.config_status = ttk.Label(roi_frame, text="ROIs: 0/4 configured", foreground="red")
-        self.config_status.grid(row=2, column=0, columnspan=2, pady=1)
+        self.detected_canvas = tk.Canvas(detected_frame, bg="black", width=270, height=540)
+        self.detected_canvas.grid(row=0, column=0, sticky="nsew")
         
-        # ========== Controls ==========
-        control_frame = ttk.LabelFrame(control_main, text="Controls", padding=3)
-        control_frame.grid(row=1, column=0, sticky="ew", pady=(0, 2))
-        control_frame.grid_columnconfigure((0, 1, 2), weight=1)
+        self.detected_canvas_image = self.detected_canvas.create_image(135, 200, anchor="center")
         
-        self.start_btn = ttk.Button(control_frame, text="START", command=self.start_capture, 
-                                   style="success.TButton")
-        self.start_btn.grid(row=0, column=0, sticky="ew", padx=1)
+        self.detected_placeholder = self.detected_canvas.create_text(135, 200,
+                                                                   text="Detected Results\nWill Show Here", 
+                                                                   fill="gray",
+                                                                   font=("Arial", 12),
+                                                                   anchor="center")
+
+    def setup_control_section(self, parent):
+        control_container = ttk.Frame(parent)
+        control_container.grid(row=1, column=0, sticky="ew", padx=5, pady=5)
         
-        self.pause_btn = ttk.Button(control_frame, text="PAUSE", command=self.pause_capture, 
-                                   state="disabled")
-        self.pause_btn.grid(row=0, column=1, sticky="ew", padx=1)
+        roi_frame = ttk.Frame(control_container)
+        roi_frame.pack(fill="x", pady=(0, 8))
         
-        self.stop_btn = ttk.Button(control_frame, text="STOP", command=self.stop_capture, 
-                                  state="disabled")
-        self.stop_btn.grid(row=0, column=2, sticky="ew", padx=1)
+        ttk.Button(roi_frame, text="Select ROI", 
+                  command=self.select_roi,
+                  style="primary.TButton").pack(side="left", padx=2, fill="x", expand=True)
         
-        ttk.Button(control_frame, text="CLEAR DATA", command=self.clear_data).grid(
-            row=1, column=0, columnspan=3, pady=2, sticky="ew")
+        ttk.Button(roi_frame, text="Select Logo", 
+                  command=self.select_logo).pack(side="left", padx=2, fill="x", expand=True)
         
-        # ========== Date Input ==========
-        date_frame = ttk.LabelFrame(control_main, text="Date/Time", padding=3)
-        date_frame.grid(row=2, column=0, sticky="ew", pady=(0, 2))
+        ttk.Button(roi_frame, text="Team ROI", 
+                  command=self.select_team_roi).pack(side="left", padx=2, fill="x", expand=True)
         
-        ttk.Entry(date_frame, textvariable=self.manual_date, font=("Arial", 9)).pack(fill="x")
+        ttk.Button(roi_frame, text="Score ROI", 
+                  style="success.TButton",
+                  command=self.select_score_roi).pack(side="left", padx=2, fill="x", expand=True)
         
-        # ========== Status ==========
-        status_frame = ttk.LabelFrame(control_main, text="Status", padding=3)
-        status_frame.grid(row=3, column=0, sticky="ew", pady=(0, 2))
+        ttk.Button(roi_frame, text="Load Headers", 
+                  style="success.TButton",
+                  command=self.load_headers).pack(side="left", padx=2, fill="x", expand=True)
         
-        self.status_label = ttk.Label(status_frame, textvariable=self.status_text, 
-                                    font=("Arial", 8), wraplength=200)
+        api_frame = ttk.Frame(control_container)
+        api_frame.pack(fill="x", pady=(0, 8))
+        
+        self.api_entry = ttk.Entry(api_frame, textvariable=self.api_key)
+        self.api_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        
+        self.set_placeholder(self.api_entry, "API KEY = sk-proj-***")
+        
+        ttk.Button(api_frame, text="OK", 
+                  command=self.submit_api_key,
+                  width=5).pack(side="left")
+        
+        input_frame = ttk.Frame(control_container)
+        input_frame.pack(fill="x", pady=(0, 8))
+        
+        self.datetime_entry = ttk.Entry(input_frame, 
+                                       textvariable=self.date_time,
+                                       font=("Arial", 9))
+        self.datetime_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        
+        style = ttk.Style()
+        style.configure("Normal.TEntry", foreground="white", font=("Arial", 9))
+        self.team_entry = ttk.Entry(input_frame,
+                                   textvariable=self.team_name,
+                                   font=("Arial", 9))
+        self.team_entry.pack(side="left", fill="x", expand=True)
+        self.team_entry.configure(style="Normal.TEntry")
+        
+        self.set_placeholder(self.team_entry, "Team Name")
+
+        self.match_score_entry = ttk.Entry(input_frame,
+                                    textvariable=self.match_score,
+                                    font=("Arial", 9))
+        self.match_score_entry.pack(side="left", fill="x", expand=True)
+        self.match_score_entry.configure(style="Normal.TEntry")
+        self.set_placeholder(self.match_score_entry, "Match Score")
+        
+        action_frame = ttk.Frame(control_container)
+        action_frame.pack(fill="x", pady=(0, 8))
+        
+        self.scroll_spinbox = ttk.Spinbox(action_frame, 
+                                         from_=1000, 
+                                         to=30000, 
+                                         increment=500,
+                                         textvariable=self.scroll_value,
+                                         width=10)
+        self.scroll_spinbox.pack(side="left", padx=(0, 10))
+        
+        self.start_button = ttk.Button(action_frame, 
+                                      text="Start", 
+                                      command=self.toggle_start,
+                                      style="success.TButton",
+                                      width=15)
+        self.start_button.pack(side="left", fill="x", expand=True)
+        self.start_button.state(["disabled"])
+
+        status_frame = ttk.LabelFrame(control_container, text="Status", padding=5)
+        status_frame.pack(fill="x")
+        
+        self.status_label = ttk.Label(status_frame, 
+                                     textvariable=self.status_text,
+                                     font=("Arial", 9))
         self.status_label.pack(anchor="w")
+
+    def update_config_status(self):
+        config_count = sum([
+            self.roi_coordinates is not None,
+            self.logo_coordinates is not None,
+            self.team_coordinates is not None,
+            self.score_coordinates is not None
+        ])
+
+        status_text = f"ROIs: {config_count}/4 configured."
+        color = (
+            "green" if config_count == 4
+            else "orange" if config_count == 3
+            else "yellow" if config_count == 2
+            else "red"
+        )
+
+        self.status_text.set(status_text)
+
+        if config_count == 4:
+            self.start_button.state(["!disabled"])
+            self.status_label.configure(foreground="green")
+        else:
+            self.start_button.state(["disabled"])
+            self.status_label.configure(foreground=color)
+    
+    def setup_right_panel(self):
+        right_frame = ttk.LabelFrame(self.root, text="Extracted Data", padding=10)
+        right_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+        right_frame.grid_rowconfigure(0, weight=1)
+        right_frame.grid_columnconfigure(0, weight=1)
         
-        self.performance_label = ttk.Label(status_frame, text="Performance: --", font=("Arial", 8))
-        self.performance_label.pack(anchor="w")
+        columns = ("id", "header", "odds")
         
-        self.blocks_label = ttk.Label(status_frame, text="Blocks: 0 | Partial: 0", font=("Arial", 8))
-        self.blocks_label.pack(anchor="w")
+        self.tree = ttk.Treeview(right_frame, columns=columns, show="headings")
         
-        # ========== Settings ==========
-        settings_frame = ttk.LabelFrame(control_main, text="Detection Settings", padding=3)
-        settings_frame.grid(row=4, column=0, sticky="ew", pady=(0, 2))
-        settings_frame.grid_columnconfigure(1, weight=1)
+        self.tree.heading("id", text="ID")
+        self.tree.heading("header", text="Header")
+        self.tree.heading("odds", text="Odds")
         
-        # FPS
-        ttk.Label(settings_frame, text="FPS:", font=("Arial", 8)).grid(row=0, column=0, sticky="w")
-        ttk.Spinbox(settings_frame, from_=5, to=30, textvariable=self.fps, width=8).grid(
-            row=0, column=1, sticky="ew", padx=(5, 0))
+        self.tree.column("id", width=20, anchor="center")
+        self.tree.column("header", width=100, anchor="w")
+        self.tree.column("odds", width=200, anchor="w")
         
-        # OCR Interval
-        ttk.Label(settings_frame, text="OCR Every:", font=("Arial", 8)).grid(row=1, column=0, sticky="w")
-        ttk.Spinbox(settings_frame, from_=1, to=10, textvariable=self.ocr_interval, width=8).grid(
-            row=1, column=1, sticky="ew", padx=(5, 0))
-        
-        # Detection Sensitivity
-        ttk.Label(settings_frame, text="Sensitivity:", font=("Arial", 8)).grid(row=2, column=0, sticky="w")
-        ttk.Scale(settings_frame, from_=0.5, to=1.0, variable=self.detection_sensitivity, 
-                 orient="horizontal").grid(row=2, column=1, sticky="ew", padx=(5, 0))
-        
-        # Checkboxes
-        ttk.Checkbutton(settings_frame, text="GPU", variable=self.use_gpu, 
-                       command=self.toggle_gpu).grid(row=3, column=0, sticky="w")
-        ttk.Checkbutton(settings_frame, text="Threshold", 
-                       variable=self.apply_threshold).grid(row=3, column=1, sticky="w")
-        
-        # ========== Export ==========
-        export_frame = ttk.LabelFrame(control_main, text="Export", padding=3)
-        export_frame.grid(row=5, column=0, sticky="ew", pady=(0, 2))
-        export_frame.grid_columnconfigure((0, 1), weight=1)
-        
-        ttk.Button(export_frame, text="CSV", command=self.export_csv).grid(
-            row=0, column=0, padx=(0, 1), sticky="ew")
-        ttk.Button(export_frame, text="Excel", command=self.export_excel).grid(
-            row=0, column=1, padx=(1, 0), sticky="ew")
-        
-    def setup_data_panel(self):
-        """Setup main data table panel - this is the primary interface"""
-        data_frame = ttk.LabelFrame(self.root, text="Detected NESINE Blocks (Main Panel)", padding=5)
-        data_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=3, pady=3)
-        data_frame.grid_rowconfigure(0, weight=1)
-        data_frame.grid_columnconfigure(0, weight=1)
-        
-        # Create Treeview with larger display
-        columns = ("timestamp", "team_names", "block_id", "confidence", "extracted_odds")
-        self.tree = ttk.Treeview(data_frame, columns=columns, show="headings", height=12)
-        
-        # Define headings and column widths
-        self.tree.heading("timestamp", text="Date/Time")
-        self.tree.heading("team_names", text="Team Names")
-        self.tree.heading("block_id", text="Block ID")
-        self.tree.heading("confidence", text="Confidence")
-        self.tree.heading("extracted_odds", text="Extracted Odds Data")
-        
-        self.tree.column("timestamp", width=120, anchor="center")
-        self.tree.column("team_names", width=160, anchor="center")
-        self.tree.column("block_id", width=80, anchor="center")
-        self.tree.column("confidence", width=80, anchor="center")
-        self.tree.column("extracted_odds", width=400, anchor="w")
-        
-        # Scrollbars
-        v_scrollbar = ttk.Scrollbar(data_frame, orient="vertical", command=self.tree.yview)
-        h_scrollbar = ttk.Scrollbar(data_frame, orient="horizontal", command=self.tree.xview)
+        v_scrollbar = ttk.Scrollbar(right_frame, orient="vertical", command=self.tree.yview)
+        h_scrollbar = ttk.Scrollbar(right_frame, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
         
-        # Grid layout
         self.tree.grid(row=0, column=0, sticky="nsew")
         v_scrollbar.grid(row=0, column=1, sticky="ns")
         h_scrollbar.grid(row=1, column=0, sticky="ew")
         
+        self.tree.bind("<Double-1>", self.on_double_click)
+        self.tree.bind("<Button-3>", self.show_context_menu)
+        
+        self.create_context_menu()
+        self.add_placeholder_data()
+    
+    def show_context_menu(self, event):
+        item = self.tree.identify_row(event.y)
+        if item:
+            self.tree.selection_set(item)
+            self.context_menu.post(event.x_root, event.y_root)
+            
+    def delete_selected_row(self):
+        selected_items = self.tree.selection()
+        if not selected_items:
+            messagebox.showwarning("Warning", "Please select a row to delete")
+            return
+        
+        if messagebox.askyesno("Confirm Delete", "Are you sure you want to delete the selected row?"):
+            for item in selected_items:
+                self.tree.delete(item)
+            messagebox.showinfo("Success", "Row deleted successfully")
+
+    def clear_selected_row(self):
+        selected_items = self.tree.selection()
+        if not selected_items:
+            messagebox.showwarning("Warning", "Please select a row to clear")
+            return
+        
+        if messagebox.askyesno("Confirm Clear", "Are you sure you want to clear the selected row data?"):
+            for item in selected_items:
+                current_values = list(self.tree.item(item, 'values'))
+                new_values = [current_values[0], "", ""]
+                self.tree.item(item, values=new_values)
+            messagebox.showinfo("Success", "Row cleared successfully")
+
+    def add_new_row(self):
+        self.data_counter += 1
+        new_row = (str(self.data_counter), "", "")
+        self.tree.insert("", "end", values=new_row)
+        
+        children = self.tree.get_children()
+        if children:
+            self.tree.see(children[-1])
+        
+        messagebox.showinfo("Success", "New row added successfully")
+
+    def clear_all_rows(self):
+        if not self.tree.get_children():
+            messagebox.showwarning("Warning", "Table is already empty")
+            return
+        
+        if messagebox.askyesno("Confirm Clear All", 
+                            "Are you sure you want to clear ALL rows?\nThis cannot be undone!"):
+            for item in self.tree.get_children():
+                self.tree.delete(item)
+            
+            self.data_counter = 0
+            self.current_id = 1
+            self.hash_values.clear()
+            messagebox.showinfo("Success", "All rows cleared successfully")
+
+    def create_context_menu(self):
+        self.context_menu = Menu(self.root, tearoff=0)
+        self.context_menu.add_command(label="Delete Row", command=self.delete_selected_row)
+        self.context_menu.add_command(label="Clear Row", command=self.clear_selected_row)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="Add New Row", command=self.add_new_row)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="Clear All Rows", command=self.clear_all_rows)
+
+    def setup_bottom_panel(self):
+        bottom_frame = ttk.Frame(self.root)
+        bottom_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=5, pady=(0, 5))
+        
+        export_frame = ttk.Frame(bottom_frame)
+        export_frame.pack(side="right")
+        
+        ttk.Button(export_frame, 
+                  text="Export CSV", 
+                  command=self.export_csv,
+                  style="info.TButton").pack(side="left", padx=5)
+        
+        ttk.Button(export_frame, 
+                  text="Export EXCEL", 
+                  command=self.export_excel,
+                  style="info.TButton").pack(side="left", padx=5)
+    
+    def set_placeholder(self, entry_widget, placeholder_text):
+        entry_widget.insert(0, placeholder_text)
+        entry_widget.configure(foreground='gray')
+        
+        def on_focus_in(event):
+            if entry_widget.get() == placeholder_text:
+                entry_widget.delete(0, tk.END)
+                entry_widget.configure(foreground='white')
+        
+        def on_focus_out(event):
+            if entry_widget.get() == '':
+                entry_widget.insert(0, placeholder_text)
+                entry_widget.configure(foreground='gray')
+        
+        entry_widget.bind('<FocusIn>', on_focus_in)
+        entry_widget.bind('<FocusOut>', on_focus_out)
+        
     def select_roi(self):
-        """Select main data ROI for capture"""
-        self.roi = self.create_roi_selector("Select Main Data Region")
-        self.update_config_status()
+        self.roi_coordinates = self.create_roi_selector("Select Main ROI")
+        if self.roi_coordinates and self.roi_coordinates['width'] > 0 and self.roi_coordinates['height'] > 0:
+            self.roi_count += 1
+            self.update_config_status()
+            self.stop_roi_preview()       
+            self.root.after(500, self.start_roi_preview)
         
-    def select_team_roi(self):
-        """Select team names ROI"""
-        self.team_roi = self.create_roi_selector("Select Team Names Region")
-        self.update_config_status()
-    
-    def select_logo_roi(self):
-        """Select NESINE logo ROI for pattern matching"""
-        self.nesine_logo_roi = self.create_roi_selector("Select NESINE Logo Region")
-        self.update_config_status()
-    
-    def pick_divider_color(self):
-        """Pick divider background color for block separation"""
-        overlay = tk.Toplevel(self.root)
-        overlay.attributes("-fullscreen", True)
-        overlay.attributes("-alpha", 0.3)
-        overlay.configure(bg="black")
-        overlay.attributes("-topmost", True)
-        
-        canvas = tk.Canvas(overlay, cursor="cross", bg="black", highlightthickness=0)
-        canvas.pack(fill="both", expand=True)
-        
-        instruction = tk.Label(overlay, text="Click on divider/background color to sample", 
-                             bg="yellow", fg="black", font=("Arial", 12))
-        instruction.pack(pady=10)
-        
-        def on_click(event):
-            x, y = event.x, event.y
+    def select_logo(self):
+        self.logo_coordinates = self.create_roi_selector("Select Logo Region")
+        if self.logo_coordinates and self.logo_coordinates['width'] > 0 and self.logo_coordinates['height'] > 0:
+            self.roi_count += 1
+            
+            coords = self.logo_coordinates
+            self.logo_monitor = {
+                "top": int(coords["y1"]),
+                "left": int(coords["x1"]),
+                "width": int(coords["x2"] - coords["x1"]),
+                "height": int(coords["y2"] - coords["y1"])
+            }
+            
             try:
                 with mss.mss() as sct:
-                    # Sample 5x5 area for better color average
-                    sample = sct.grab({"left": x-2, "top": y-2, "width": 5, "height": 5})
-                    img = np.array(sample)
-                    # Get average color (BGR format)
-                    avg_color = img[:, :, :3].mean(axis=(0,1)).astype(int)
-                    self.divider_color = tuple(avg_color.tolist())
-                overlay.destroy()
-                self.update_config_status()
+                    sct_img = sct.grab(self.logo_monitor)
+                    logo = np.array(sct_img)
+                    self.logo = cv2.cvtColor(logo, cv2.COLOR_BGRA2BGR)
+                    h, w = self.logo.shape[:2]
+                    self.logo_hist = self.calculate_hist(self.logo)
+                    self.detector = BlockDetector(min_area=20000, logo_hist=self.logo_hist, logo_size=(h, w))
             except Exception as e:
-                print(f"Color picker error: {e}")
-                overlay.destroy()
+                print(f"Logo selection error: {e}")
+                return
+
+            self.update_config_status()
+            status_text = self.status_text.get()
+            self.status_text.set(status_text + " Logo selected.")
+            self.frame_processed = False       
         
-        canvas.bind("<Button-1>", on_click)
-        overlay.bind("<Escape>", lambda e: overlay.destroy())
-        overlay.focus_set()
-    
-    def update_config_status(self):
-        """Update configuration status display"""
-        config_count = sum([
-            self.roi is not None,
-            self.team_roi is not None,
-            self.nesine_logo_roi is not None,
-            self.divider_color is not None
-        ])
+    def select_team_roi(self):
+        self.team_coordinates = self.create_roi_selector("Select Team Region")
+        if self.extract_team_names():
+            self.roi_count += 1
+            self.update_config_status()
         
-        status_text = f"ROIs: {config_count}/4 configured"
-        color = "green" if config_count >= 3 else "orange" if config_count >= 2 else "red"
+    def select_score_roi(self):
+        self.score_coordinates = self.create_roi_selector("Select Score Region")
+        if self.extract_match_scores():
+            self.roi_count += 1
+            self.update_config_status()
+            status_text = self.status_text.get()
+            self.status_text.set(status_text + " Score ROI selected.")
+
+    def load_headers(self):
+        file_path = filedialog.askopenfilename(
+            title="Select Header JSON File",
+            filetypes=[("JSON files", "*.json")]
+        )
+
+        if file_path is None: 
+            return
         
-        self.config_status.configure(text=status_text, foreground=color)
+        try:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                data = json.load(file)
+                if "headers" not in data:
+                    raise ValueError("The JSON file does not contain the expected 'headers' key.")
+                self.headers = data["headers"]
+                messagebox.showinfo("Success", f"Headers are loaded: {file_path}")
+
+        except FileNotFoundError:
+            messagebox.showerror("Error", f"File not found: {file_path}")
+        except json.JSONDecodeError:
+            messagebox.showerror("Error", f"Invalid JSON format in file: {file_path}")
+        except ValueError as ve:
+            messagebox.showerror("Error", str(ve))
+        except Exception as e:
+            messagebox.showerror("Error", f"An unexpected error occurred: {str(e)}")
+            
+    def extract_team_names(self):
+        if not (self.team_coordinates and self.team_coordinates['width'] > 0 and self.team_coordinates['height'] > 0):
+            return False
+            
+        coords = self.team_coordinates
+        self.team_roi_monitor = {
+            "top": int(coords["y1"]),
+            "left": int(coords["x1"]),
+            "width": int(coords["x2"] - coords["x1"]),
+            "height": int(coords["y2"] - coords["y1"])
+        }
         
-        if config_count >= 3:  # Minimum: data ROI, logo ROI, divider color
-            self.status_text.set("Ready to start detection")
-        else:
-            self.status_text.set("Configure ROIs and divider color")
-    
+        try:
+            with mss.mss() as sct:
+                sct_img = sct.grab(self.team_roi_monitor)
+                team_name_image = np.array(sct_img)
+                self.team_name_image = cv2.cvtColor(team_name_image, cv2.COLOR_BGRA2RGB)
+
+                with self.ocr_lock:
+                    texts = extract_text.extract_team_name(self.team_name_image)
+                    def __clean_text__(text):
+                        cleaned = re.findall(r'(\d+-\d+)', text.replace(" ", ""))
+                        return " | ".join(cleaned)
+                    if len(texts) == 3:
+                        team_name = f"{texts[0]} vs {texts[2]}"
+                        if self.current_team_names != team_name:
+                            self.team_name.set(team_name)
+                            self.current_team_names = team_name
+                            self.data_counter = 0
+                            self.current_id = 1
+                            self.hash_values.clear()
+                            for item in self.tree.get_children():
+                                self.tree.delete(item)
+                            self.team_entry.configure(style="Normal.TEntry") 
+                        return True
+        except Exception as e:
+            print(f"Team name extraction error: {e}")
+        return False
+
+    def extract_match_scores(self):
+        if not (self.score_coordinates and self.score_coordinates['width'] > 0 and self.score_coordinates['height'] > 0):
+            return False
+            
+        coords = self.score_coordinates
+        self.team_roi_monitor = {
+            "top": int(coords["y1"]),
+            "left": int(coords["x1"]),
+            "width": int(coords["x2"] - coords["x1"]),
+            "height": int(coords["y2"] - coords["y1"])
+        }
+        
+        try:
+            with mss.mss() as sct:
+                sct_img = sct.grab(self.team_roi_monitor)
+                match_scores_image = np.array(sct_img)
+                self.match_scores_image = cv2.cvtColor(match_scores_image, cv2.COLOR_BGRA2RGB)
+
+                with self.ocr_lock:
+                    text = extract_text.extract_score_data(self.match_scores_image)
+                    def __clean_text__(text):
+                        cleaned = re.findall(r'(\d+-\d+)', text.replace(" ", ""))
+                        return " | ".join(cleaned)
+                    if len(text) >= 6:
+                        match_score = f"{__clean_text__(text)}"
+                        self.current_match_score = match_score
+                        self.match_score.set(self.current_match_score)
+                        return True
+        except Exception as e:
+            print(f"Match scores extraction error: {e}")
+        return False
+
     def create_roi_selector(self, title="Select Region"):
-        """Create ROI selection overlay"""
         roi = None
         
         overlay = tk.Toplevel(self.root)
@@ -321,754 +590,932 @@ class NESINEOddsScraper:
         canvas.pack(fill="both", expand=True)
         
         instruction = tk.Label(overlay, text=f"{title} - Drag to select, ESC to cancel", 
-                             bg="yellow", fg="black", font=("Arial", 12))
-        instruction.pack(pady=10)
+                            bg="yellow", fg="black", font=("Arial", 12))
+        instruction.place(relx=0.5, rely=0.02, anchor="center")
         
-        start_x = start_y = None
+        start_x = 0
+        start_y = 0
         rect_id = None
         
         def on_mouse_down(event):
             nonlocal start_x, start_y, rect_id
-            start_x, start_y = event.x, event.y
+            start_x = event.x
+            start_y = event.y
             if rect_id:
                 canvas.delete(rect_id)
             rect_id = canvas.create_rectangle(start_x, start_y, start_x, start_y, 
-                                           outline="red", width=3)
+                                        outline="red", width=3, fill="")
         
         def on_mouse_drag(event):
+            nonlocal rect_id
             if rect_id:
                 canvas.coords(rect_id, start_x, start_y, event.x, event.y)
         
         def on_mouse_up(event):
             nonlocal roi
-            if start_x is not None and start_y is not None:
-                end_x, end_y = event.x, event.y
-                roi = {
-                    "left": min(start_x, end_x),
-                    "top": min(start_y, end_y),
-                    "width": abs(end_x - start_x),
-                    "height": abs(end_y - start_y)
-                }
+            if rect_id:
+                coords = canvas.coords(rect_id)
+                if len(coords) == 4:
+                    x1, y1, x2, y2 = coords
+                    left = min(x1, x2)
+                    top = min(y1, y2)
+                    right = max(x1, x2)
+                    bottom = max(y1, y2)
+                    
+                    roi = {
+                        "left": int(left),
+                        "top": int(top),
+                        "width": int(right - left),
+                        "height": int(bottom - top),
+                        "x1": int(left),
+                        "y1": int(top),
+                        "x2": int(right),
+                        "y2": int(bottom)
+                    }
             overlay.destroy()
         
+        def on_escape(event):
+            overlay.destroy()
+    
         canvas.bind("<ButtonPress-1>", on_mouse_down)
         canvas.bind("<B1-Motion>", on_mouse_drag)
         canvas.bind("<ButtonRelease-1>", on_mouse_up)
-        overlay.bind("<Escape>", lambda e: overlay.destroy())
+        overlay.bind("<Escape>", on_escape)
+        
         overlay.focus_set()
+        overlay.grab_set()
         
         self.root.wait_window(overlay)
         return roi
-    
-    def start_capture(self):
-        """Start capture and detection"""
-        if not self.roi or not self.divider_color:
-            messagebox.showwarning("Configuration Incomplete", 
-                                 "Please configure at least Data ROI and Divider Color!")
-            return
         
-        self.stop_flag = False
-        self.running.set()
-        self.frame_sequence = 0
-        self.partial_blocks.clear()
+    def submit_api_key(self):
+        api_value = self.api_key.get()
+        if api_value and api_value != "API KEY = sk-proj-***":
+            print(f"API Key submitted: {api_value}")
+            messagebox.showinfo("API Key", f"API Key saved: {api_value[:10]}...")
+        else:
+            messagebox.showwarning("API Key", "Please enter a valid API key")
+            
+    def toggle_start(self):
+        if not self.is_running:
+            self.stop_scroll_detection()
+            self.root.after(500, self.start_scroll_detection)
+            self.is_running = True
+            self.is_paused = False
+            self.start_button.configure(text="Pause", style="warning.TButton")
+            self.status_text.set("Status: Running - Scrolling detection...")
+            self.extract_team_names()
+            self.current_id = 1
+            self.hash_values.clear()
+            self.orphan_blocks.clear()
         
-        # Update UI
-        self.start_btn.configure(state="disabled")
-        self.pause_btn.configure(state="normal")
-        self.stop_btn.configure(state="normal")
+        elif self.is_running and not self.is_paused:
+            self.stop_scroll_detection()
+            self.is_paused = True
+            self.start_button.configure(text="Resume", style="success.TButton")
+            self.status_text.set("Status: Paused - Click Resume to continue...")
         
-        # Start worker threads
-        threading.Thread(target=self.capture_and_detect_loop, daemon=True).start()
-        
-        self.status_text.set("Running divider-first block detection...")
-    
-    def pause_capture(self):
-        """Pause capture"""
-        self.running.clear()
-        self.pause_btn.configure(state="disabled")
-        self.start_btn.configure(state="normal")
-        self.status_text.set("Paused")
-    
-    def stop_capture(self):
-        """Stop capture completely"""
-        self.stop_flag = True
-        self.running.clear()
-        
-        # Reset UI
-        self.start_btn.configure(state="normal")
-        self.pause_btn.configure(state="disabled")
-        self.stop_btn.configure(state="disabled")
-        
-        self.status_text.set("Stopped")
-    
-    def toggle_gpu(self):
-        """Toggle GPU usage for OCR"""
-        try:
-            self.ocr = PaddleOCR(
-                use_angle_cls=True,
-                lang='tr',
-                use_gpu=self.use_gpu.get(),
-                show_log=False,
-                rec_algorithm='CRNN',
-                det_algorithm='DB'
-            )
-            status = "enabled" if self.use_gpu.get() else "disabled"
-            self.status_text.set(f"GPU {status}")
-        except Exception as e:
-            self.use_gpu.set(False)
-            messagebox.showerror("GPU Error", f"Failed to enable GPU: {str(e)}")
-    
-    def capture_and_detect_loop(self):
-        """Main capture and detection loop - divider-first approach"""
-        with mss.mss() as sct:
-            while not self.stop_flag:
-                if self.running.is_set() and self.roi:
-                    start_time = time.time()
-                    
-                    try:
-                        # Capture screenshot
-                        screenshot = sct.grab(self.roi)
-                        screenshot_array = np.array(screenshot)
-                        frame = cv2.cvtColor(screenshot_array, cv2.COLOR_BGRA2BGR)
-                        
-                        # Apply threshold if enabled
-                        if self.apply_threshold.get():
-                            frame = self.apply_image_threshold(frame)
-                        
-                        self.frame_sequence += 1
-                        self.current_frame = frame.copy()
-                        
-                        # DIVIDER-FIRST APPROACH
-                        blocks = self.detect_blocks_by_dividers(frame)
-                        
-                        # Process detected blocks
-                        if blocks:
-                            self.process_detected_blocks(frame, blocks)
-                        
-                        # Update preview every few frames
-                        if self.frame_sequence % max(1, self.fps.get() // 5) == 0:
-                            self.update_preview_with_detections(frame, blocks)
-                        
-                        # Performance tracking
-                        process_time = time.time() - start_time
-                        self.processing_times.append(process_time)
-                        self.root.after(0, self.update_performance_display, process_time)
-                        
-                        # Control FPS
-                        target_delay = 1.0 / max(1, self.fps.get())
-                        remaining_time = target_delay - process_time
-                        if remaining_time > 0:
-                            time.sleep(remaining_time)
-                            
-                    except Exception as e:
-                        print(f"Capture/Detection error: {e}")
-                        time.sleep(0.1)
+        elif self.is_running and self.is_paused:
+            self.start_scroll_detection()
+            self.is_paused = False
+            self.start_button.configure(text="Pause", style="warning.TButton")
+            self.status_text.set("Status: Running - Scrolling detection...")
+            self.extract_team_names()
+            self.current_id = 1
+            self.hash_values.clear()
+            
+    def export_csv(self):
+        columns = list(self.tree['columns'])
+        if columns and columns[0].lower() in ("id", "index", "#0"):
+            columns = columns[1:]
+
+        headers = ['Takımlar', 'İlk Yarı Skoru | Mac Sonucu Skoru']
+        data_rows = []
+        team_name = self.current_team_names
+        match_score = self.current_match_score
+
+        count = 0
+        for item_id in self.tree.get_children():
+            count += 1
+            row = self.tree.item(item_id)['values']
+            if row:
+                header = row[1]
+                odds = row[2]
+                odds_list = re.findall(r'\(([^,]+),\s*([^\)]+)\)', odds)
+                row_headers = [f"{header} ~ {option.strip()}" for option, _ in odds_list]
+                headers.extend(row_headers)
+                if count == 1:
+                    row_data = [team_name, match_score] + [value.strip() for _, value in odds_list]
                 else:
-                    time.sleep(0.1)
-    
-    def detect_blocks_by_dividers(self, frame):
-        """CORE: Divider-first block detection approach"""
+                    row_data = [value.strip() for _, value in odds_list]
+                data_rows.append(row_data)
+        flattened_data = [value for sublist in data_rows for value in sublist]
+        filename = self.current_team_names + "_" + self.date_time.get()
+        safe_name_csv = re.sub(r'[\\/:"*?<>|]+', '_', filename) + ".csv"
+        with open(safe_name_csv, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            writer.writerow(flattened_data)
+        messagebox.showinfo("Export", f"Data has been exported to CSV file: {safe_name_csv}")
+
+    def export_excel(self):
+        columns = list(self.tree['columns'])
+        if columns and columns[0].lower() in ("id", "index", "#0"):
+            columns = columns[1:]
+
+        headers = ['Takımlar', 'İlk Yarı Skoru | Mac Sonucu Skoru']
+        data_rows = []
+        team_name = self.current_team_names
+        match_score = self.current_match_score
+
+        count = 0
+        for item_id in self.tree.get_children():
+            count += 1
+            row = self.tree.item(item_id)['values']
+            if row:
+                header = row[1]  # Column 2: "Header"
+                odds = row[2]    # Column 3: "Odds"
+                
+                odds_list = re.findall(r'\(([^,]+),\s*([^\)]+)\)', odds)
+                
+                row_headers = [f"{header} ~ {option.strip()}" for option, _ in odds_list]
+                headers.extend(row_headers)
+
+                if count == 1:
+                    row_data = [team_name, match_score] + [value.strip() for _, value in odds_list]
+                else:
+                    row_data = [value.strip() for _, value in odds_list]
+                data_rows.append(row_data)
+        flattened_data = [value for sublist in data_rows for value in sublist]
+        filename = self.current_team_names + "_" + self.date_time.get()
+        safe_name_excel = re.sub(r'[\\/:"*?<>|]+', '_', filename) + ".xlsx"
+        wb = openpyxl.Workbook()
+        sheet = wb.active
+        sheet.title = "Exported Data"
+        for col_num, header in enumerate(headers, start=1):
+            sheet.cell(row=1, column=col_num, value=header)
+        for col_num, value in enumerate(flattened_data, start=1):
+            sheet.cell(row=2, column=col_num, value=value)
+        wb.save(safe_name_excel)
+        messagebox.showinfo("Export", f"Data has been exported to Excel file: {safe_name_excel}")
+        
+    def on_double_click(self, event):
+        selection = self.tree.selection()
+        if not selection:
+            return
+            
+        item = selection[0]
+        column = self.tree.identify_column(event.x)
+        
+        col_index = int(column.replace('#', '')) - 1
+        values = self.tree.item(item, 'values')
+        self.edit_cell(item, col_index, values)
+        
+    def edit_cell(self, item, col_index, values):
+        edit_window = tk.Toplevel(self.root)
+        edit_window.title("Edit Cell")
+        edit_window.geometry("400x300")
+        
+        edit_window.transient(self.root)
+        edit_window.grab_set()
+        
+        self.root.update_idletasks()
+        x = (self.root.winfo_x() + (self.root.winfo_width() // 2)) - 200
+        y = (self.root.winfo_y() + (self.root.winfo_height() // 2)) - 150
+        edit_window.geometry(f"+{x}+{y}")
+        
+        columns = ("id", "header", "odds")
+        col_name = columns[col_index]
+        
+        ttk.Label(edit_window, text=f"Edit {col_name}:").pack(pady=5)
+        
+        text_widget = tk.Text(edit_window, width=40, height=10, wrap=tk.WORD)
+        text_widget.pack(pady=5, padx=10, fill=tk.BOTH, expand=True)
+        
+        text_widget.insert("1.0", values[col_index])
+        text_widget.focus()
+        text_widget.tag_add("sel", "1.0", "end")
+        
+        button_frame = ttk.Frame(edit_window)
+        button_frame.pack(pady=10)
+        
+        def save_edit():
+            new_value = text_widget.get("1.0", "end-1c")
+            new_values = list(values)
+            new_values[col_index] = new_value
+            self.tree.item(item, values=new_values)
+            edit_window.destroy()
+        
+        ttk.Button(button_frame, text="Save", command=save_edit, 
+                style="success.TButton").pack(side="left", padx=5)
+        ttk.Button(button_frame, text="Cancel", command=edit_window.destroy,
+                style="danger.TButton").pack(side="left", padx=5)
+        
+        def on_ctrl_enter(event):
+            save_edit()
+            return "break"
+        
+        def on_escape(event):
+            edit_window.destroy()
+            return "break"
+        
+        text_widget.bind("<Control-Return>", on_ctrl_enter)
+        text_widget.bind("<Command-Return>", on_ctrl_enter)
+        edit_window.bind("<Escape>", on_escape)
+        
+        instruction_frame = ttk.Frame(edit_window)
+        instruction_frame.pack(pady=5)
+        
+        ttk.Label(instruction_frame, 
+                text="Ctrl+Enter: Save | Esc: Cancel",
+                font=("Arial", 9),
+                foreground="gray").pack()
+        
+    def add_placeholder_data(self):
+        sample_data = []
+        for data in sample_data:
+            self.tree.insert("", "end", values=data)
+            self.data_counter += 1
+            
+    def add_new_data(self):
+        self.data_counter += 1
+        new_data = (
+            str(self.data_counter),
+            "extracted_data_here",
+            "header_here"
+        )
+        self.tree.insert("", "end", values=new_data)
+        
+        children = self.tree.get_children()
+        if children:
+            self.tree.see(children[-1])
+
+    def start_roi_preview(self):
+        if not self.roi_coordinates or self.roi_preview_running:
+            return
+
+        coords = self.roi_coordinates
+        self.roi_monitor = {
+            "top": int(coords["y1"]),
+            "left": int(coords["x1"]),
+            "width": int(coords["x2"] - coords["x1"]),
+            "height": int(coords["y2"] - coords["y1"])
+        }
+
+        if hasattr(self, 'original_placeholder') and self.original_placeholder:
+            self.original_canvas.delete(self.original_placeholder)
+            self.original_placeholder = None
+
+        self.roi_preview_running = True
+        self.preview_thread = threading.Thread(target=self._preview_loop, daemon=True)
+        self.preview_thread.start()
+
+    def _preview_loop(self):
         try:
-            h, w = frame.shape[:2]
-            blocks = []
-            
-            # Convert divider color to numpy array for comparison
-            divider_bgr = np.array(self.divider_color, dtype=np.uint8)
-            
-            # Create mask for divider color
-            lower_bound = np.clip(divider_bgr - self.divider_tolerance, 0, 255)
-            upper_bound = np.clip(divider_bgr + self.divider_tolerance, 0, 255)
-            
-            divider_mask = cv2.inRange(frame, lower_bound, upper_bound)
-            
-            # Find horizontal divider lines
-            horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (self.min_divider_length, 1))
-            horizontal_lines = cv2.morphologyEx(divider_mask, cv2.MORPH_OPEN, horizontal_kernel)
-            
-            # Find contours of divider lines
-            contours, _ = cv2.findContours(horizontal_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            # Extract Y positions of dividers
-            divider_y_positions = []
-            for contour in contours:
-                if cv2.contourArea(contour) > self.min_divider_length:
-                    y = int(np.mean([point[0][1] for point in contour]))
-                    divider_y_positions.append(y)
-            
-            # Sort divider positions
-            divider_y_positions.sort()
-            
-            # Create blocks between consecutive dividers
-            for i in range(len(divider_y_positions) - 1):
-                y1 = divider_y_positions[i]
-                y2 = divider_y_positions[i + 1]
-                
-                # Skip if block is too small
-                if (y2 - y1) < 30:
-                    continue
-                
-                block = {
-                    'x1': 0,
-                    'y1': y1 + 2,  # Slight offset from divider
-                    'x2': w,
-                    'y2': y2 - 2,  # Slight offset from divider
-                    'type': 'complete',
-                    'frame_id': self.frame_sequence
-                }
-                blocks.append(block)
-            
-            # Handle partial blocks at top and bottom
-            if divider_y_positions:
-                # Partial block at top
-                if divider_y_positions[0] > 30:
-                    top_block = {
-                        'x1': 0,
-                        'y1': 0,
-                        'x2': w,
-                        'y2': divider_y_positions[0] - 2,
-                        'type': 'partial_top',
-                        'frame_id': self.frame_sequence
-                    }
-                    blocks.append(top_block)
-                
-                # Partial block at bottom
-                if (h - divider_y_positions[-1]) > 30:
-                    bottom_block = {
-                        'x1': 0,
-                        'y1': divider_y_positions[-1] + 2,
-                        'x2': w,
-                        'y2': h,
-                        'type': 'partial_bottom',
-                        'frame_id': self.frame_sequence
-                    }
-                    blocks.append(bottom_block)
-            
-            return blocks
-            
-        except Exception as e:
-            print(f"Divider detection error: {e}")
-            return []
-    
-    def process_detected_blocks(self, frame, blocks):
-        """Process detected blocks - handle complete and partial blocks"""
-        for block in blocks:
-            try:
-                # Extract block region
-                x1, y1, x2, y2 = block['x1'], block['y1'], block['x2'], block['y2']
-                block_image = frame[y1:y2, x1:x2]
-                
-                if block_image.size == 0:
-                    continue
-                
-                # Generate block hash
-                block_hash = hashlib.md5(block_image.tobytes()).hexdigest()
-                
-                # Handle different block types
-                if block['type'] == 'complete':
-                    # Process complete block immediately
-                    self.process_complete_block(frame, block, block_image, block_hash)
-                    
-                elif block['type'] in ['partial_top', 'partial_bottom']:
-                    # Handle partial blocks - buffer and try to reconstruct
-                    self.handle_partial_block(frame, block, block_image, block_hash)
-                    
-            except Exception as e:
-                print(f"Block processing error: {e}")
-    
-    def process_complete_block(self, frame, block, block_image, block_hash):
-        """Process a complete block"""
-        try:
-            # Skip if already processed
-            if block_hash in self.detected_hashes:
-                return
-            
-            # Verify this is a NESINE block
-            if not self.verify_nesine_block(block_image):
-                return
-            
-            # Add to processed hashes
-            self.detected_hashes.append(block_hash)
-            
-            # Extract betting data via OCR
-            self.extract_and_store_block_data(frame, block, block_image, block_hash)
-            
-        except Exception as e:
-            print(f"Complete block processing error: {e}")
-    
-    def handle_partial_block(self, frame, block, block_image, block_hash):
-        """Handle partial blocks - buffer and reconstruct when possible"""
-        try:
-            block_key = f"{block['type']}_{block_hash[:8]}"
-            
-            # Store partial block
-            self.partial_blocks[block_key] = {
-                'frame_id': block['frame_id'],
-                'block': block,
-                'image': block_image.copy(),
-                'hash': block_hash,
-                'timestamp': time.time()
-            }
-            
-            # Try to reconstruct with buffered blocks
-            self.try_reconstruct_partial_blocks()
-            
-            # Clean old partial blocks (older than 2 seconds)
-            current_time = time.time()
-            keys_to_remove = []
-            for key, partial in self.partial_blocks.items():
-                if (current_time - partial['timestamp']) > 2.0:
-                    keys_to_remove.append(key)
-            
-            for key in keys_to_remove:
-                del self.partial_blocks[key]
-                
-        except Exception as e:
-            print(f"Partial block handling error: {e}")
-    
-    def try_reconstruct_partial_blocks(self):
-        """Try to reconstruct complete blocks from partial blocks"""
-        try:
-            # Look for top and bottom parts that can be combined
-            top_blocks = {k: v for k, v in self.partial_blocks.items() if 'partial_top' in k}
-            bottom_blocks = {k: v for k, v in self.partial_blocks.items() if 'partial_bottom' in k}
-            
-            # Try to match top and bottom blocks
-            for top_key, top_data in top_blocks.items():
-                for bottom_key, bottom_data in bottom_blocks.items():
-                    # Check if frames are consecutive or close
-                    frame_diff = abs(top_data['frame_id'] - bottom_data['frame_id'])
-                    if frame_diff <= 2:  # Allow small frame gaps
-                        # Try to reconstruct full block
-                        reconstructed = self.reconstruct_full_block(top_data, bottom_data)
-                        if reconstructed:
-                            # Remove used partial blocks
-                            if top_key in self.partial_blocks:
-                                del self.partial_blocks[top_key]
-                            if bottom_key in self.partial_blocks:
-                                del self.partial_blocks[bottom_key]
+            with mss.mss() as sct:
+                while self.roi_preview_running and not self._shutdown:
+                    try:
+                        if not self.roi_monitor:
                             break
                             
-        except Exception as e:
-            print(f"Block reconstruction error: {e}")
-    
-    def reconstruct_full_block(self, top_data, bottom_data):
-        """Reconstruct a complete block from top and bottom parts"""
-        try:
-            top_image = top_data['image']
-            bottom_image = bottom_data['image']
-            
-            # Check if images have compatible widths
-            if abs(top_image.shape[1] - bottom_image.shape[1]) > 10:
-                return False
-            
-            # Combine images vertically
-            combined_height = top_image.shape[0] + bottom_image.shape[0]
-            combined_width = max(top_image.shape[1], bottom_image.shape[1])
-            
-            combined_image = np.zeros((combined_height, combined_width, 3), dtype=np.uint8)
-            combined_image[:top_image.shape[0], :top_image.shape[1]] = top_image
-            combined_image[top_image.shape[0]:, :bottom_image.shape[1]] = bottom_image
-            
-            # Generate new hash for combined block
-            combined_hash = hashlib.md5(combined_image.tobytes()).hexdigest()
-            
-            # Skip if already processed
-            if combined_hash in self.detected_hashes:
-                return True
-            
-            # Verify this is a NESINE block
-            if not self.verify_nesine_block(combined_image):
-                return False
-            
-            # Add to processed hashes
-            self.detected_hashes.append(combined_hash)
-            
-            # Create combined block info
-            combined_block = {
-                'x1': 0,
-                'y1': 0,
-                'x2': combined_width,
-                'y2': combined_height,
-                'type': 'reconstructed',
-                'frame_id': max(top_data['frame_id'], bottom_data['frame_id'])
-            }
-            
-            # Extract and store data
-            self.extract_and_store_block_data(None, combined_block, combined_image, combined_hash, is_reconstructed=True)
-            
-            return True
-            
-        except Exception as e:
-            print(f"Full block reconstruction error: {e}")
-            return False
-    
-    def verify_nesine_block(self, block_image):
-        """Verify if block contains NESINE logo/branding"""
-        try:
-            # If we have a logo ROI template, use template matching
-            if self.nesine_logo_roi and hasattr(self, 'logo_template'):
-                result = cv2.matchTemplate(block_image, self.logo_template, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, _ = cv2.minMaxLoc(result)
-                if max_val > self.detection_sensitivity.get():
-                    return True
-            
-            # Fallback: OCR-based verification
-            results = self.ocr.ocr(block_image, cls=True)
-            if not results or not results[0]:
-                return False
-            
-            for line in results[0]:
-                text = line[1][0].upper().replace('İ', 'I').replace('Ş', 'S')
-                confidence = line[1][1]
-                
-                if 'NESINE' in text and confidence > (self.detection_sensitivity.get() - 0.1):
-                    return True
-            
-            return False
-            
-        except Exception as e:
-            print(f"NESINE verification error: {e}")
-            return False
-    
-    def extract_and_store_block_data(self, frame, block, block_image, block_hash, is_reconstructed=False):
-        """Extract betting data and store in results"""
-        try:
-            # Run OCR on the block
-            if self.frame_counter % self.ocr_interval.get() != 0 and not is_reconstructed:
-                return  # Skip OCR for performance unless it's a reconstructed block
-            
-            results = self.ocr.ocr(block_image, cls=True)
-            if not results or not results[0]:
-                return
-            
-            # Extract betting odds data
-            betting_data = self.extract_betting_odds(results[0])
-            if not betting_data['odds_text']:
-                return
-            
-            # Get team names from team ROI if available and main frame exists
-            team_names = "Reconstructed Block"
-            if frame is not None and self.team_roi:
-                team_names = self.extract_team_names(frame)
-            elif not is_reconstructed:
-                team_names = "No Team ROI"
-            
-            # Create final data entry
-            block_data = {
-                'timestamp': self.manual_date.get(),
-                'team_names': team_names[:100],
-                'block_id': block_hash[:8],
-                'confidence': f"{betting_data['avg_confidence']:.2f}",
-                'extracted_odds': betting_data['odds_text']
-            }
-            
-            # Store and update UI
-            self.odds_data.append(block_data)
-            self.root.after(0, self.update_data_table, block_data)
-            
-        except Exception as e:
-            print(f"Data extraction error: {e}")
-    
-    def extract_betting_odds(self, ocr_results):
-        """Extract and format betting odds - Turkish format with improved parsing"""
-        betting_items = []
-        confidences = []
-        
-        try:
-            for line in ocr_results:
-                text = line[1][0].strip()
-                confidence = line[1][1]
-                
-                if confidence < 0.5 or 'NESINE' in text.upper():
-                    continue
-                
-                confidences.append(confidence)
-                
-                # Look for odds patterns (Turkish format: 1,85 or 1.85)
-                odds_matches = re.findall(r'(\d+[.,]\d+)', text)
-                
-                if odds_matches:
-                    # Clean text (remove odds numbers)
-                    clean_text = text
-                    for odds in odds_matches:
-                        clean_text = re.sub(re.escape(odds), '', clean_text).strip()
-                    
-                    # Format each odds found
-                    for odds in odds_matches:
-                        odds_normalized = odds.replace(',', '.')
+                        sct_img = sct.grab(self.roi_monitor)
+                        frame = np.array(sct_img)
+                        frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2RGB)
+                        
+                        pil_img = Image.fromarray(frame)
+                        
+                        canvas_width = 270
+                        canvas_height = 540
+                        
+                        img_width, img_height = pil_img.size
+                        aspect_ratio = img_width / img_height
+                        
+                        if aspect_ratio > (canvas_width / canvas_height):
+                            new_width = canvas_width
+                            new_height = int(canvas_width / aspect_ratio)
+                        else:
+                            new_height = canvas_height
+                            new_width = int(canvas_height * aspect_ratio)
+                        
+                        pil_img = pil_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                        
                         try:
-                            # Validate odds value
-                            odds_float = float(odds_normalized)
-                            if 1.0 <= odds_float <= 1000.0:  # Reasonable odds range
-                                if clean_text and len(clean_text) > 1:
-                                    betting_items.append(f"{clean_text}({odds_normalized})")
-                                else:
-                                    betting_items.append(f"({odds_normalized})")
-                        except ValueError:
-                            continue
-                else:
-                    # Pure text without odds - could be market name or team name
-                    if len(text) > 2 and not re.search(r'^\d+', text):
-                        # Clean up common OCR artifacts
-                        text = re.sub(r'[^\w\sğüşıöçĞÜŞİÖÇ.-]', '', text).strip()
-                        if len(text) > 1:
-                            betting_items.append(text)
-            
-            avg_confidence = sum(confidences) / len(confidences) if confidences else 0
-            odds_text = " | ".join(betting_items[:15])  # Limit to prevent UI overflow
-            
-            return {
-                'odds_text': odds_text,
-                'avg_confidence': avg_confidence
-            }
-        
+                            self.image_queue.put_nowait(pil_img)
+                        except queue.Full:
+                            try:
+                                self.image_queue.get_nowait()
+                                self.image_queue.put_nowait(pil_img)
+                            except queue.Empty:
+                                pass
+                        
+                        time.sleep(1.0 / 15)
+                        
+                    except Exception as e:
+                        print(f"Capture error: {e}")
+                        time.sleep(0.1)
+                        
         except Exception as e:
-            print(f"Odds extraction error: {e}")
-            return {'odds_text': '', 'avg_confidence': 0}
-    
-    def extract_team_names(self, frame):
-        """Extract team names from dedicated team ROI"""
+            print(f"Capture thread error: {e}")
+
+    def update_preview_images(self):
+        if self._shutdown:
+            return
+            
         try:
-            if not self.team_roi:
-                return "No Team ROI"
+            images_to_process = []
+            while True:
+                try:
+                    pil_img = self.image_queue.get_nowait()
+                    images_to_process.append(pil_img)
+                    
+                except queue.Empty:
+                    break
             
-            # Extract team region
-            x = self.team_roi["left"] - (self.roi["left"] if self.roi else 0)
-            y = self.team_roi["top"] - (self.roi["top"] if self.roi else 0)
-            w = self.team_roi["width"]
-            h = self.team_roi["height"]
-            
-            # Ensure coordinates are within frame bounds
-            frame_h, frame_w = frame.shape[:2]
-            if x < 0 or y < 0 or x + w > frame_w or y + h > frame_h:
-                return "Team ROI Out of Bounds"
-            
-            team_region = frame[y:y+h, x:x+w]
-            if team_region.size == 0:
-                return "Empty Team ROI"
-            
-            # OCR on team region
-            team_results = self.ocr.ocr(team_region, cls=True)
-            if not team_results or not team_results[0]:
-                return "No Team Text"
-            
-            # Extract team names
-            team_texts = []
-            for line in team_results[0]:
-                text = line[1][0].strip()
-                confidence = line[1][1]
+            if images_to_process:
+                pil_img = images_to_process[-1] 
                 
-                if confidence > 0.6 and len(text) > 2:
-                    # Clean team name
-                    text = re.sub(r'[^\w\sğüşıöçĞÜŞİÖÇ.-]', '', text).strip()
-                    if len(text) > 2:
-                        team_texts.append(text)
-            
-            return " vs ".join(team_texts[:2]) if team_texts else "Unknown Teams"
-            
-        except Exception as e:
-            print(f"Team extraction error: {e}")
-            return f"Team Error: {str(e)[:20]}"
-    
-    def apply_image_threshold(self, frame):
-        """Apply image processing for better OCR and detection"""
-        try:
-            # Convert to grayscale for processing
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            
-            # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-            enhanced = clahe.apply(gray)
-            
-            # Apply adaptive threshold
-            thresh = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                         cv2.THRESH_BINARY, 11, 2)
-            
-            # Convert back to BGR
-            return cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
-            
-        except Exception as e:
-            print(f"Image threshold error: {e}")
-            return frame
-    
-    def update_preview_with_detections(self, frame, detected_blocks):
-        """Update preview with visual detection indicators"""
-        try:
-            preview_frame = frame.copy()
-            
-            # Draw detected blocks with red rectangles
-            for block in detected_blocks:
-                x1, y1, x2, y2 = block['x1'], block['y1'], block['x2'], block['y2']
+                photo = ImageTk.PhotoImage(pil_img)
+                self.original_photo = photo
                 
-                # Different colors for different block types
-                if block['type'] == 'complete':
-                    color = (0, 255, 0)  # Green for complete
-                elif block['type'] == 'reconstructed':
-                    color = (255, 0, 255)  # Magenta for reconstructed
-                else:
-                    color = (0, 0, 255)  # Red for partial
-                
-                # Draw rectangle
-                cv2.rectangle(preview_frame, (x1, y1), (x2, y2), color, 2)
-                
-                # Add block type label
-                label = f"{block['type'][:4]}#{block.get('frame_id', '?')}"
-                cv2.putText(preview_frame, label, (x1, y1-5), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-            
-            # Add frame counter
-            cv2.putText(preview_frame, f"Frame: {self.frame_sequence}", (10, 25), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            
-            # Add partial blocks counter
-            partial_count = len(self.partial_blocks)
-            cv2.putText(preview_frame, f"Partial: {partial_count}", (10, 50), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-            
-            # Update preview display
-            self.update_preview(preview_frame)
-            
-        except Exception as e:
-            print(f"Preview update with detections error: {e}")
-            # Fallback to regular preview
-            self.update_preview(frame)
-    
-    def update_preview(self, frame):
-        """Update preview display - Samsung A55 aspect ratio (9:18)"""
-        try:
-            h, w = frame.shape[:2]
-            
-            # Samsung A55-like aspect ratio: 270x540 (9:18)
-            target_width, target_height = 270, 540
-            
-            # Calculate scaling to fit within target size while maintaining aspect ratio
-            scale_w = target_width / w
-            scale_h = target_height / h
-            scale = min(scale_w, scale_h)
-            
-            new_width = int(w * scale)
-            new_height = int(h * scale)
-            
-            # Resize frame
-            resized_frame = cv2.resize(frame, (new_width, new_height))
-            
-            # Convert to RGB for tkinter
-            rgb_frame = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(rgb_frame)
-            photo = ImageTk.PhotoImage(pil_image)
-            
-            # Update in main thread
-            self.root.after(0, self._update_preview_image, photo)
-            
+                if self.original_canvas_image and self.original_canvas.winfo_exists():
+                    self.original_canvas.itemconfig(self.original_canvas_image, image=photo)
+                    
         except Exception as e:
             print(f"Preview update error: {e}")
+        
+        if self.root.winfo_exists() and not self._shutdown:
+            self.root.after(100, self.update_preview_images)
     
-    def _update_preview_image(self, photo):
-        """Update preview image in main thread"""
+    def stop_roi_preview(self):
+        if self.roi_preview_running:
+            self.roi_preview_running = False
+            
+            if self.preview_thread and self.preview_thread.is_alive():
+                self.preview_thread.join(timeout=1.0)
+            
+            while not self.image_queue.empty():
+                try:
+                    self.image_queue.get_nowait()
+                except queue.Empty:
+                    break
+    
+    def get_hash(self, text: str) -> str:
+        return hashlib.md5(text.encode('utf-8')).hexdigest()
+    
+    def check_processed(self, hash_value):
+        return hash_value in self.hash_values
+    
+    def calculate_hist(self, logo):
         try:
-            self.preview_label.configure(image=photo, text="")
-            self.preview_label.image = photo  # Keep reference
+            logo_hsv = cv2.cvtColor(logo, cv2.COLOR_BGR2HSV)
+            logo_hist = cv2.calcHist([logo_hsv], [0, 1], None, [50, 60], [0, 180, 0, 256])
+            logo_hist = cv2.normalize(logo_hist, logo_hist, 0, 1, cv2.NORM_MINMAX)
+            return logo_hist
+        except Exception as e:
+            print(f"Histogram calculation error: {e}")
+            return None
+    
+    def start_scroll_detection(self):
+        if not self.roi_coordinates or self.scroll_detection_running:
+            return
+            
+        self.scroll_detection_running = True
+        self.scroll_thread = threading.Thread(target=self._scroll_detection_loop, daemon=True)
+        self.scroll_thread.start()
+    
+    def detect_scroll_change(self, prev_frame, curr_frame):
+        threshold = self.scroll_value.get()
+        try:
+            if prev_frame.shape[2] == 4:
+                prev_frame = cv2.cvtColor(prev_frame, cv2.COLOR_BGRA2BGR)
+            if curr_frame.shape[2] == 4:
+                curr_frame = cv2.cvtColor(curr_frame, cv2.COLOR_BGRA2BGR)
+            
+            diff = cv2.absdiff(prev_frame, curr_frame)
+            gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+            non_zero_count = cv2.countNonZero(gray_diff)
+            
+            is_scrolling = non_zero_count > threshold
+            return is_scrolling, non_zero_count
             
         except Exception as e:
-            print(f"Preview image update error: {e}")
+            print(f"Scroll detection error: {e}")
+            return False, 0
     
-    def update_data_table(self, block_data):
-        """Update main data table with new block"""
+    def _scroll_detection_loop(self):
         try:
-            self.tree.insert("", "end", values=(
-                block_data['timestamp'],
-                block_data['team_names'],
-                block_data['block_id'],
-                block_data['confidence'],
-                block_data['extracted_odds']
-            ))
-            
-            # Auto-scroll to bottom
-            children = self.tree.get_children()
-            if children:
-                self.tree.see(children[-1])
-            
-            # Update counter
-            partial_count = len(self.partial_blocks)
-            self.blocks_label.configure(text=f"Blocks: {len(self.odds_data)} | Partial: {partial_count}")
-            
-        except Exception as e:
-            print(f"Table update error: {e}")
-    
-    def update_performance_display(self, process_time):
-        """Update performance metrics display"""
-        try:
-            if self.processing_times:
-                avg_time = sum(self.processing_times) / len(self.processing_times)
-                fps = 1.0 / avg_time if avg_time > 0 else 0
+            with mss.mss() as sct:
+                self.prev_frame = None
                 
-                self.performance_label.configure(
-                    text=f"Performance: {fps:.1f} FPS | Process: {process_time*1000:.0f}ms"
-                )
-        except Exception as e:
-            print(f"Performance update error: {e}")
-    
-    def clear_data(self):
-        """Clear all collected data and reset state"""
-        if messagebox.askyesno("Clear Data", "Clear all data and reset detection state?"):
-            self.odds_data.clear()
-            self.detected_hashes.clear()
-            self.partial_blocks.clear()
-            self.tree.delete(*self.tree.get_children())
-            self.frame_sequence = 0
-            self.blocks_label.configure(text="Blocks: 0 | Partial: 0")
-            self.status_text.set("Data cleared - Ready to restart")
-    
-    def export_csv(self):
-        """Export data to CSV file"""
-        if not self.odds_data:
-            messagebox.showinfo("No Data", "No data to export!")
-            return
-        
-        try:
-            df = pd.DataFrame(self.odds_data)
-            filename = f"nesine_odds_divider_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-            df.to_csv(filename, index=False, encoding='utf-8-sig')
-            messagebox.showinfo("Export Success", f"Data exported to {filename}\n{len(self.odds_data)} records saved")
-        except Exception as e:
-            messagebox.showerror("Export Error", f"Failed to export CSV: {str(e)}")
-    
-    def export_excel(self):
-        """Export data to Excel file"""
-        if not self.odds_data:
-            messagebox.showinfo("No Data", "No data to export!")
-            return
-        
-        try:
-            df = pd.DataFrame(self.odds_data)
-            filename = f"nesine_odds_divider_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-            df.to_excel(filename, index=False, engine='openpyxl')
-            messagebox.showinfo("Export Success", f"Data exported to {filename}\n{len(self.odds_data)} records saved")
-        except Exception as e:
-            messagebox.showerror("Export Error", f"Failed to export Excel: {str(e)}")
-    
-    def on_close(self):
-        """Handle application close"""
-        self.stop_flag = True
-        self.running.clear()
-        
-        # Clean up resources
-        if hasattr(self, 'current_frame'):
-            del self.current_frame
-        if hasattr(self, 'preview_frame'):
-            del self.preview_frame
-        
-        self.root.destroy()
+                while self.scroll_detection_running and not self._shutdown:
+                    try:
+                        if not self.roi_monitor:
+                            break
+                            
+                        sct_img = sct.grab(self.roi_monitor)
+                        curr_frame = np.array(sct_img)
+                        
+                        if self.prev_frame is not None:
+                            is_scrolling, diff_count = self.detect_scroll_change(
+                                self.prev_frame, curr_frame
+                            )
+                            
+                            new_status = "Scrolling" if is_scrolling else "Captured"
 
+                            if self.current_scroll_state != new_status:
+                                self.current_scroll_state = new_status
+                                text_color = "orange" if new_status == "Scrolling" else "lime"
+                                
+                                self.root.after(0, lambda s=new_status, c=text_color: 
+                                            self.update_scroll_canvas_text(s, c))
+                            
+                            if is_scrolling:
+                                self.frame_processed = False
+                            else:
+                                if not self.frame_processed and self.logo is not None and self.logo_hist is not None:
+                                    self._trigger_block_detection(curr_frame.copy())
+                                    self.frame_processed = True
+
+                        self.prev_frame = curr_frame.copy()
+                        time.sleep(0.1)
+                        
+                    except Exception as e:
+                        time.sleep(0.1)
+                        
+        except Exception as e:
+            print(f"Scroll detection thread error: {e}")
+
+    def _trigger_block_detection(self, frame):
+        with self.block_detection_lock:
+            if self.block_detection_thread is None or not self.block_detection_thread.is_alive():
+                self.block_detection_thread = threading.Thread(
+                    target=self._detect_and_show_result, args=(frame.copy(),), daemon=True
+                )
+                self.block_detection_thread.start()
+
+    def _detect_and_show_result(self, frame):
+        try:
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+
+            if frame_bgr is not None and self.logo is not None and self.logo_hist is not None and self.detector is not None:
+                blocks, headers, original_image = self.detector.detect_rectangles(frame_bgr)
+                # top_10_rectangles = self.detector.get_top_n(blocks, 10)
+                
+                height = 0
+                if len(blocks) >= 1:
+                    x, y, w, height = blocks[0]['coordinates']
+
+                result_image, detected_blocks = self.detector.visualize_results(original_image, blocks, headers)
+
+                try:
+                    self.result_image_queue.put_nowait(result_image)
+                except queue.Full:
+                    try:
+                        self.result_image_queue.get_nowait()
+                        self.result_image_queue.put_nowait(result_image)
+                    except queue.Empty:
+                        pass
+                
+                self.root.after(50, self.extract_team_names)
+                
+                self._process_pairing(original_image, headers, detected_blocks, height)
+
+        except Exception as e:
+            print(f"Block detection error: {e}")
+            import traceback
+            traceback.print_exc() 
+
+    def update_result_images_from_queue(self):
+        if self._shutdown:
+            return
+            
+        try:
+            result_image = None
+            try:
+                result_image = self.result_image_queue.get_nowait()
+            except queue.Empty:
+                pass
+                
+            if result_image is not None:
+                rgb_frame = cv2.cvtColor(result_image, cv2.COLOR_BGR2RGB)
+                pil_image = Image.fromarray(rgb_frame)
+
+                canvas_width = 270
+                canvas_height = 540
+                
+                img_width, img_height = pil_image.size
+                aspect_ratio = img_width / img_height
+                
+                if aspect_ratio > (canvas_width / canvas_height):
+                    new_width = canvas_width
+                    new_height = int(canvas_width / aspect_ratio)
+                else:
+                    new_height = canvas_height
+                    new_width = int(canvas_height * aspect_ratio)
+                
+                pil_image = pil_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                
+                detected_photo = ImageTk.PhotoImage(pil_image)
+                
+                if hasattr(self, 'detected_placeholder') and self.detected_placeholder:
+                    self.detected_canvas.delete(self.detected_placeholder)
+                    self.detected_placeholder = None
+                
+                self.detected_canvas.itemconfig(self.detected_canvas_image, image=detected_photo)
+                self.detected_photo = detected_photo 
+                
+        except Exception as e:
+            print(f"Result image update error: {e}")
+        
+        if self.root.winfo_exists() and not self._shutdown:
+            self.root.after(50, self.update_result_images_from_queue)
+
+    def _crop_image(self, image, region):
+        if image is None or image.size == 0:
+            return None
+            
+        x, y, w, h = region['coordinates']
+        h_img, w_img = image.shape[:2]
+        
+        x = max(0, min(x, w_img - 1))
+        y = max(0, min(y, h_img - 1))
+        w = max(1, min(w, w_img - x))
+        h = max(1, min(h, h_img - y))
+        
+        return image[y:y+h, x:x+w]
+    
+    def normalize_text(self, text):
+        if not text:
+            return ""
+        text = text.upper()
+        text = re.sub(r'\s+', '', text)
+        return text
+    
+    def _preprocess_odds_block_image(self, odds_block_image):
+        if odds_block_image is None or odds_block_image.size == 0:
+            return None
+            
+        try:
+            gray = cv2.cvtColor(odds_block_image, cv2.COLOR_BGR2GRAY)
+            scale_factor = 2
+            height, width = gray.shape[:2]
+            image_resized = cv2.resize(gray, (width*scale_factor, height*scale_factor), interpolation=cv2.INTER_CUBIC)
+            kernel = np.array([[0, -1,  0],
+                               [-1,  5, -1],
+                               [0, -1,  0]])
+            sharpened = cv2.filter2D(image_resized, -1, kernel)
+            return sharpened
+        except Exception as e:
+            print(f"Preprocessing error: {e}")
+            return odds_block_image
+
+    def _get_block_odds_text(self, original_image, block):
+        x, y, w, h = block['coordinates']
+                
+        block_image = self._crop_image(original_image, block)
+        if block_image is None or block_image.size == 0:
+            return ""
+            
+        odds_blocks = self.detector.detect_odds_blocks(block_image) if self.detector else []
+
+        text_concat = ""
+        odds = ""
+        count = 0
+        num_odds_blocks = len(odds_blocks)
+        
+        for odds_block in odds_blocks:
+            odds_block_image = self._crop_image(block_image, odds_block)
+            if odds_block_image is None or odds_block_image.size == 0:
+                continue
+                
+            preprocessed = self._preprocess_odds_block_image(odds_block_image)
+            if preprocessed is None:
+                continue
+                
+            with self.ocr_lock:
+                odds_texts = extract_text.get_odds_data(preprocessed)
+
+            odds += f"({odds_texts[0]}, {odds_texts[1]})"
+
+            count += 1
+            if count < num_odds_blocks:
+                odds += ", "
+            
+            if num_odds_blocks > 2:
+                chunk_size = 2 if num_odds_blocks % 2 == 0 and num_odds_blocks % 6 != 0 else 3
+                if count % chunk_size == 0:
+                    odds += "\n"
+
+            text_concat += odds_texts[1]
+
+        return odds, text_concat
+
+    def _get_header_text(self, original_image, region):
+            try:
+                x, y, w, h = region['coordinates']
+                h_img, w_img = original_image.shape[:2]
+                w = int(w * 0.5)
+
+                x = max(0, min(x, w_img - 1))
+                y = max(0, min(y, h_img - 1))
+                w = max(1, min(w, w_img - x))
+                h = max(1, min(h, h_img - y))
+
+                crop_image = original_image[y:y+h, x:x+w]
+                if crop_image.size == 0:
+                    return ""
+                    
+                pre = self._preprocess_odds_block_image(crop_image)
+                if pre is None:
+                    return ""
+                    
+                text = extract_text.extract_block_data(pre)
+                return text
+            except Exception as e:
+                print(f"Error during text extraction: {e}")
+                return ""
+
+    def _process_pairing(self, original_image, headers, blocks, block_height):
+        num_headers = len(headers)
+        num_blocks = len(blocks)
+
+        if num_blocks >= 1:
+            block_height = blocks[0]['coordinates'][3]
+        else:
+            return
+        
+        if 150 < block_height < 200:
+            if num_blocks >= 1: # medium block
+                b_text, b_odds = self._get_block_odds_text(original_image, blocks[0])
+                h_text = "Unknown"
+                if num_headers == 1:
+                    h_text = self._get_header_text(original_image, headers[0])
+                    h_text = self.match_headers(h_text)
+                    if h_text is None:
+                        return
+
+                normalized = self.normalize_text(b_odds)
+                hash_val = self.get_hash(normalized)
+
+                if not self.check_processed(hash_val):
+                    self.hash_values.add(hash_val)
+                    self.insert_pair_to_treeview(h_text, b_text)
+                    return
+        
+        if 400 < block_height:
+            if num_blocks == 1: # large block
+                block = blocks[0]
+                bx, by, bw, bh = block['coordinates']
+                h_text = "Unknown"
+                if num_headers >= 1: 
+                    header = headers[num_headers - 1]
+                    hy = header['coordinates'][1]
+
+                    if hy < by:
+                        h_text = self._get_header_text(original_image, header)
+                        h_text = self.match_headers(h_text)
+                        if h_text is None:
+                            return
+                
+                if by > 10 and by + bh > self.roi_coordinates['height'] - 10:
+                    self.orphan_blocks.append(block)
+                    print(f"first block has been added. {by}, {by + bh}, {self.roi_coordinates['height']}")
+                    return
+                elif by < 10 and by + bh < self.roi_coordinates['height'] - 10:
+                    print(f"last block has been added. {len(self.orphan_blocks)} {by}, {by + bh}, {self.roi_coordinates['height']}")
+                    num = len(self.orphan_blocks)
+                    if num >= 1:
+
+                        first_block = self.orphan_blocks[num - 1]
+                        last_block = block
+                        print(f"2 blocks are merged.")
+                        str1, _ = self._get_block_odds_text(original_image, first_block)
+                        str2, _ = self._get_block_odds_text(original_image, last_block)
+
+                        combined_str = f"{str1}, {str2}"
+                        normalized = self.normalize_2blocks_odds_string(combined_str)
+
+                        self.insert_pair_to_treeview(h_text, combined_str)
+                        self.orphan_blocks.clear()
+                        return            
+                        
+        used_blocks = set()
+        for header in headers:
+            hy = header['coordinates'][1]
+            for i, block in enumerate(blocks):
+                if i in blocks:
+                    continue
+                    
+                by = block['coordinates'][1]
+                if by > hy:
+                    h_text = self._get_header_text(original_image, header)
+                    print(f"{h_text}")
+                    h_text = self.match_headers(h_text)
+                    if h_text is None:
+                        return
+                    b_text, b_odds = self._get_block_odds_text(original_image, block)
+                    normalized = self.normalize_text(b_odds)
+                    hash_val = self.get_hash(normalized)
+                    
+                    if not self.check_processed(hash_val):
+                        self.hash_values.add(hash_val)
+                        self.insert_pair_to_treeview(h_text, b_text)
+                    
+                    used_blocks.add(i)
+                    break
+            
+    def normalize_2blocks_odds_string(self, data): 
+        if not data:
+            return ""
+        data_clean = re.sub(r'\s+', '', data)
+        entries = data_clean.split('),(')
+        entries[0] = entries[0].lstrip('(')
+        entries[-1] = entries[-1].rstrip(')')
+        seen_entries = []
+        normalized = []
+        
+        for entry in entries:
+            parts = entry.split(',', 1)
+            if len(parts) != 2:
+                continue
+            header = parts[0].strip()
+            odds_str = parts[1].strip()
+            try:
+                odds_val = float(odds_str)
+            except ValueError:
+                odds_val = odds_str
+            
+            is_duplicate = False
+            for seen_header, seen_odds in seen_entries:
+                header_similarity = SequenceMatcher(None, header, seen_header).ratio()
+                if isinstance(odds_val, float) and isinstance(seen_odds, float):
+                    odds_similar = abs(odds_val - seen_odds) < 0.01
+                else:
+                    odds_similar = odds_val == seen_odds
+                if header_similarity > 0.9 and odds_similar:
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                seen_entries.append((header, odds_val))
+                normalized.append(entry)
+        
+        result = ', '.join(f'({e})' for e in normalized)
+        return result
+
+    def insert_pair_to_treeview(self, header_text, odds_text):
+        if not self._shutdown:
+            self.root.after(0, lambda: self._insert_pair(header_text, odds_text))
+
+    def _insert_pair(self, header_text, odds_text):
+        try:
+            self.tree.insert(
+                "",
+                "end",
+                values=(self.current_id, header_text, odds_text)
+            )
+            self.current_id += 1
+        except Exception as e:
+            print(f"Insert pair error: {e}")
+
+    def update_scroll_canvas_text(self, status, color):
+        try:
+            if self.scroll_text_id and self.original_canvas.winfo_exists() and not self._shutdown:
+                self.original_canvas.itemconfig(self.scroll_text_id, 
+                                            text=status, 
+                                            fill=color)
+        except Exception as e:
+            print(f"Canvas text update error: {e}")
+
+    def stop_scroll_detection(self):
+        if self.scroll_detection_running:
+            self.scroll_detection_running = False
+            
+            if self.scroll_thread and self.scroll_thread.is_alive():
+                self.scroll_thread.join(timeout=1.0)
+            
+            self.current_scroll_state = "Unknown"
+
+    def on_close(self):
+        self._shutdown = True
+        self.stop_roi_preview()
+        self.stop_scroll_detection()
+        
+        if messagebox.askyesno("Exit", "Are you sure you want to exit?"):
+            self.roi_preview_running = False
+            self.scroll_detection_running = False
+            
+            gc.collect()
+            self.root.after(200, self.root.destroy)
+        else:
+            self._shutdown = False
+            if self.roi_coordinates and self.roi_coordinates['width'] > 0:
+                self.root.after(300, self.start_roi_preview)
+                self.root.after(300, self.start_scroll_detection)
+
+    def apply_ocr_corrections(self, text):
+        if not text:
+            return ""
+        corrections = {
+            'ılk': 'ilk',
+            'Ilk': 'İlk', 
+            'Mac': 'Maç',
+            'Maq': 'Maç',
+            'mac': 'maç',
+            'maq': 'maç',
+            'Sans': 'Şans',
+            'sans': 'şans',
+            'Cifte': 'Çifte',
+            'cifte': 'çifte',
+            'Yari': 'Yarı',
+            'yari': 'yarı',
+            '$ans': 'şans',
+            'üst': 'Üst',
+            'karsilikli': 'Karşılıklı',
+            'Araligi': 'Aralığı',
+            'Cift': 'Çift',
+            'Karsilikll': 'Karşılıklı',
+            'Us0': 'Üst',
+            'Ost': 'Üst'
+        }
+
+        for wrong, correct in corrections.items():
+            text = text.replace(wrong, correct)
+
+        return text
+
+    def clean_turkish(self, text):
+        if not text:
+            return ""
+        text = self.apply_ocr_corrections(text)
+
+        import re
+        text = re.sub(r'\s+', ' ', text.strip())
+        
+        return text.lower()
+
+    def match_headers(self, extracted_text, threshold=95):
+        if len(self.headers) == 0:
+            return None
+
+        cleaned = self.clean_turkish(extracted_text)
+        corrected = self.apply_ocr_corrections(cleaned)
+        normalized_headers = [self.normalize_unicode(header) for header in self.headers]
+        extracted_numbers = re.findall(r'\d+(?:,\d+)?', cleaned)
+        if extracted_numbers:
+            for header in normalized_headers:
+                header_numbers = re.findall(r'\d+(?:,\d+)?', header)
+                if extracted_numbers == header_numbers:
+                    remaining_text = re.sub(r'\d+(?:,\d+)?', '', corrected).strip()
+                    header_text = re.sub(r'\d+(?:,\d+)?', '', header).strip()
+
+                    best_match = process.extractOne(remaining_text, [header_text], scorer=fuzz.token_sort_ratio)
+                    if best_match and best_match[1] >= threshold:
+                        matched_index = normalized_headers.index(header)
+                        original_header = self.headers[matched_index]
+                        return original_header
+                    similarity = SequenceMatcher(None, remaining_text, header_text).ratio() * 100
+                    if similarity >= threshold:
+                        matched_index = normalized_headers.index(header)
+                        original_header = self.headers[matched_index]
+                        return original_header
+                    break
+            else:
+                return None
+        best_match = process.extractOne(corrected, normalized_headers, scorer=fuzz.token_sort_ratio)
+        
+        if best_match and best_match[1] >= threshold:
+            matched_index = normalized_headers.index(best_match[0])
+            original_header = self.headers[matched_index]
+            return original_header
+        for header in normalized_headers:
+            header_text = re.sub(r'\d+(?:,\d+)?', '', header).strip()
+            similarity = SequenceMatcher(None, corrected, header_text).ratio() * 100
+            if similarity >= threshold:
+                matched_index = normalized_headers.index(header)
+                original_header = self.headers[matched_index]
+                return original_header
+
+        return None
+
+    def normalize_unicode(self, text):
+        text = unicodedata.normalize('NFC', text)
+        return self.clean_turkish(text)
+    
 def main():
-    """Main application entry point"""
+    print("Starting Makcolik Odds Scraper...")
+    
     root = tb.Window()
-    app = NESINEOddsScraper(root)
+    app = MainUI(root)
     
     try:
         root.mainloop()
     except KeyboardInterrupt:
-        app.on_close()
+        print("Application interrupted")
+    except Exception as e:
+        print(f"Application error: {e}")
+    finally:
+        print("Application closed")
 
 if __name__ == "__main__":
     main()
