@@ -160,4 +160,6 @@ class BlockDetector:
                 })
         
         odds_blocks.reverse()
+        print(f"Detected {len(odds_blocks)} odds blocks.")
+
         return odds_blocks

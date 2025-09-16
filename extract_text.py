@@ -115,7 +115,7 @@ def get_odds_data(odds_block):
         
         if not result or not result[0]:
             num = random.randint(100000, 999999)
-            cv2.imwrite(f"{num}.png", odds_block)
+            # cv2.imwrite(f"{num}.png", odds_block)
             return ['-', '-']
             
         texts = []
@@ -129,12 +129,12 @@ def get_odds_data(odds_block):
         
         if len(texts) == 0:
             num = random.randint(100000, 999999)
-            cv2.imwrite(f"{num}.png", odds_block)
+            # cv2.imwrite(f"{num}.png", odds_block)
             return ['-', '-']
         elif len(texts) == 1:
             if pattern.match(texts[0]):
                 num = random.randint(100000, 999999)
-                cv2.imwrite(f"{num}.png", odds_block)
+                # cv2.imwrite(f"{num}.png", odds_block)
                 return ['-', texts[0]]
             else:
                 return [texts[0], '-']
