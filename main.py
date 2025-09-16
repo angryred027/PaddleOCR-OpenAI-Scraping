@@ -691,6 +691,7 @@ class MainUI:
             self.hash_values.clear()
             
     def export_csv(self):
+        
         columns = list(self.tree['columns'])
         if columns and columns[0].lower() in ("id", "index", "#0"):
             columns = columns[1:]
@@ -715,16 +716,32 @@ class MainUI:
                 else:
                     row_data = [value.strip() for _, value in odds_list]
                 data_rows.append(row_data)
+
         flattened_data = [value for sublist in data_rows for value in sublist]
+        
+        def sort_key(header):
+            for i, pred_header in enumerate(self.headers):
+                if pred_header in header:
+                    return i
+            return len(self.headers)
+        
+        initial_headers = headers[:2]
+        sortable_headers = headers[2:]
+        sorted_indices = sorted(range(len(sortable_headers)), key=lambda i: sort_key(sortable_headers[i]))
+        
+        final_headers = initial_headers + [sortable_headers[i] for i in sorted_indices]
+        final_data = [flattened_data[0], flattened_data[1]] + [flattened_data[i+2] for i in sorted_indices]
+
         filename = self.current_team_names + "_" + self.date_time.get()
         safe_name_csv = re.sub(r'[\\/:"*?<>|]+', '_', filename) + ".csv"
         with open(safe_name_csv, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(headers)
-            writer.writerow(flattened_data)
+            writer.writerow(final_headers)
+            writer.writerow(final_data)
         messagebox.showinfo("Export", f"Data has been exported to CSV file: {safe_name_csv}")
 
     def export_excel(self):
+        
         columns = list(self.tree['columns'])
         if columns and columns[0].lower() in ("id", "index", "#0"):
             columns = columns[1:]
@@ -739,28 +756,40 @@ class MainUI:
             count += 1
             row = self.tree.item(item_id)['values']
             if row:
-                header = row[1]  # Column 2: "Header"
-                odds = row[2]    # Column 3: "Odds"
-                
+                header = row[1]
+                odds = row[2]
                 odds_list = re.findall(r'\(([^,]+),\s*([^\)]+)\)', odds)
-                
                 row_headers = [f"{header} ~ {option.strip()}" for option, _ in odds_list]
                 headers.extend(row_headers)
-
                 if count == 1:
                     row_data = [team_name, match_score] + [value.strip() for _, value in odds_list]
                 else:
                     row_data = [value.strip() for _, value in odds_list]
                 data_rows.append(row_data)
+
         flattened_data = [value for sublist in data_rows for value in sublist]
+        
+        def sort_key(header):
+            for i, pred_header in enumerate(self.headers):
+                if pred_header in header:
+                    return i
+            return len(self.headers)
+        
+        initial_headers = headers[:2]
+        sortable_headers = headers[2:]
+        sorted_indices = sorted(range(len(sortable_headers)), key=lambda i: sort_key(sortable_headers[i]))
+        
+        final_headers = initial_headers + [sortable_headers[i] for i in sorted_indices]
+        final_data = [flattened_data[0], flattened_data[1]] + [flattened_data[i+2] for i in sorted_indices]
+
         filename = self.current_team_names + "_" + self.date_time.get()
         safe_name_excel = re.sub(r'[\\/:"*?<>|]+', '_', filename) + ".xlsx"
         wb = openpyxl.Workbook()
         sheet = wb.active
         sheet.title = "Exported Data"
-        for col_num, header in enumerate(headers, start=1):
+        for col_num, header in enumerate(final_headers, start=1):
             sheet.cell(row=1, column=col_num, value=header)
-        for col_num, value in enumerate(flattened_data, start=1):
+        for col_num, value in enumerate(final_data, start=1):
             sheet.cell(row=2, column=col_num, value=value)
         wb.save(safe_name_excel)
         messagebox.showinfo("Export", f"Data has been exported to Excel file: {safe_name_excel}")
