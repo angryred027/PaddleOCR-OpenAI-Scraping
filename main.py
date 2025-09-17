@@ -701,55 +701,43 @@ class MainUI:
             self.extract_match_scores()
             self.current_id = 1
             self.hash_values.clear()
-            
+
     def export_csv(self):
-        
         columns = list(self.tree['columns'])
         if columns and columns[0].lower() in ("id", "index", "#0"):
             columns = columns[1:]
 
-        headers = ['Takımlar', 'İlk Yarı Skoru | Mac Sonucu Skoru']
-        data_rows = []
-        team_name = self.current_team_names
-        match_score = self.current_match_score
+        final_headers = ['Takımlar', 'İlk Yarı Skoru', 'Mac Sonucu Skoru']
+        for h in self.headers_config:
+            for option in h["options"]:
+                final_headers.append(f"{h['header']} ~ {option}")
 
-        count = 0
+        row_data = ["-", "-"] + ["-"] * (len(final_headers) - 2)
+        row_data[0] = self.current_team_names
+        row_data[1] = self.scores[1]
+        row_data[2] = self.scores[0]
+
         for item_id in self.tree.get_children():
-            count += 1
             row = self.tree.item(item_id)['values']
-            if row:
-                header = row[1]
-                odds = row[2]
-                odds_list = re.findall(r'\(([^,]+),\s*([^\)]+)\)', odds)
-                row_headers = [f"{header} ~ {option.strip()}" for option, _ in odds_list]
-                headers.extend(row_headers)
-                if count == 1:
-                    row_data = [team_name, match_score] + [value.strip() for _, value in odds_list]
-                else:
-                    row_data = [value.strip() for _, value in odds_list]
-                data_rows.append(row_data)
-
-        flattened_data = [value for sublist in data_rows for value in sublist]
-        
-        def sort_key(header):
-            for i, pred_header in enumerate(self.headers):
-                if pred_header in header:
-                    return i
-            return len(self.headers)
-        
-        initial_headers = headers[:2]
-        sortable_headers = headers[2:]
-        sorted_indices = sorted(range(len(sortable_headers)), key=lambda i: sort_key(sortable_headers[i]))
-        
-        final_headers = initial_headers + [sortable_headers[i] for i in sorted_indices]
-        final_data = [flattened_data[0], flattened_data[1]] + [flattened_data[i+2] for i in sorted_indices]
+            if not row:
+                continue
+            header = row[1]
+            odds = row[2]
+            odds_list = re.findall(r'\(([^,]+),\s*([^\)]+)\)', odds)
+            for option, value in odds_list:
+                key = f"{header} ~ {option.strip()}"
+                if key in final_headers:
+                    idx = final_headers.index(key)
+                    row_data[idx] = value.strip()
 
         filename = self.current_team_names + "_" + self.date_time.get()
         safe_name_csv = re.sub(r'[\\/:"*?<>|]+', '_', filename) + ".csv"
-        with open(safe_name_csv, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
+
+        with open(safe_name_csv, "w", newline="", encoding="utf-8-sig") as csvfile:
+            writer = csv.writer(csvfile)
             writer.writerow(final_headers)
-            writer.writerow(final_data)
+            writer.writerow(row_data)
+
         messagebox.showinfo("Export", f"Data has been exported to CSV file: {safe_name_csv}")
 
     def export_excel(self):
