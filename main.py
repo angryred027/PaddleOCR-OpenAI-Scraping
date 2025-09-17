@@ -711,7 +711,7 @@ class MainUI:
         for h in self.headers_config:
             for option in h["options"]:
                 final_headers.append(f"{h['header']} ~ {option}")
-
+                    
         row_data = ["-", "-"] + ["-"] * (len(final_headers) - 2)
         row_data[0] = self.current_team_names
         row_data[1] = self.scores[1]
@@ -724,11 +724,16 @@ class MainUI:
             header = row[1]
             odds = row[2]
             odds_list = re.findall(r'\(([^,]+),\s*([^\)]+)\)', odds)
-            for option, value in odds_list:
-                key = f"{header} ~ {option.strip()}"
-                if key in final_headers:
-                    idx = final_headers.index(key)
-                    row_data[idx] = value.strip()
+            if header in [h["header"] for h in self.headers_config]:
+                values_only = [val.strip() for _, val in odds_list]
+                start_idx = None
+                for i, h in enumerate(self.headers_config):
+                    if h["header"] == header:
+                        start_idx = 3 + sum(len(cfg["options"]) for cfg in self.headers_config[:i])
+                        break
+                if start_idx is not None:
+                    for j, val in enumerate(values_only):
+                        row_data[start_idx + j] = val
 
         filename = self.current_team_names + "_" + self.date_time.get()
         safe_name_csv = re.sub(r'[\\/:"*?<>|]+', '_', filename) + ".csv"
@@ -763,11 +768,16 @@ class MainUI:
             header = row[1]
             odds = row[2]
             odds_list = re.findall(r'\(([^,]+),\s*([^\)]+)\)', odds)
-            for option, value in odds_list:
-                key = f"{header} ~ {option.strip()}"
-                if key in final_headers:
-                    idx = final_headers.index(key)
-                    row_data[idx] = value.strip()
+            if header in [h["header"] for h in self.headers_config]:
+                values_only = [val.strip() for _, val in odds_list]
+                start_idx = None
+                for i, h in enumerate(self.headers_config):
+                    if h["header"] == header:
+                        start_idx = 3 + sum(len(cfg["options"]) for cfg in self.headers_config[:i])
+                        break
+                if start_idx is not None:
+                    for j, val in enumerate(values_only):
+                        row_data[start_idx + j] = val
 
         filename = self.current_team_names + "_" + self.date_time.get()
         safe_name_excel = re.sub(r'[\\/:"*?<>|]+', '_', filename) + ".xlsx"
