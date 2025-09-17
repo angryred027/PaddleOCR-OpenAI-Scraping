@@ -49,6 +49,7 @@ class MainUI:
         self.current_id = 1
         self.current_team_names = ""
         self.current_match_score = ""
+        self.scores = []
         self.hash_values = set()
 
         self.mss_sct = None
@@ -107,6 +108,7 @@ class MainUI:
         self.orphan_blocks = deque(maxlen=2)
         
         self.api_key = tk.StringVar()
+        self.headers_config = []
         self.headers = []
         self.bet_options_order = []
         self.scroll_value = tk.IntVar(value=5000)
@@ -484,6 +486,7 @@ class MainUI:
             self.status_text.set(status_text + " Score ROI selected.")
 
     def load_headers(self):
+
         file_path = filedialog.askopenfilename(
             title="Select Header JSON File",
             filetypes=[("JSON files", "*.json")]
@@ -497,8 +500,16 @@ class MainUI:
                 data = json.load(file)
                 if "headers" not in data:
                     raise ValueError("The JSON file does not contain the expected 'headers' key.")
-                self.headers = data["headers"]
-                self.bet_options_order = data['bet_opts_order']
+                
+                def _get_bet_options(header: str):
+                    for item in data["headers"]:
+                        if item["header"] == header:
+                            return item["options"]
+                    return []
+                
+                self.headers_config = data["headers"]
+                self.headers = [item["header"] for item in data["headers"]]
+                self.bet_options_order = _get_bet_options("İlk Yarı / Maç Skoru")
                 messagebox.showinfo("Success", f"Headers are loaded: {file_path}")
 
         except FileNotFoundError:
@@ -571,10 +582,11 @@ class MainUI:
                     text = extract_text.extract_score_data(self.match_scores_image)
                     def __clean_text__(text):
                         cleaned = re.findall(r'(\d+-\d+)', text.replace(" ", ""))
-                        return " | ".join(cleaned)
+                        return " | ".join(cleaned), cleaned
                     if len(text) >= 6:
-                        match_score = f"{__clean_text__(text)}"
-                        self.current_match_score = match_score
+                        score_text, scores = __clean_text__(text)
+                        self.current_match_score = f"{score_text}"
+                        self.scores = scores
                         self.match_score.set(self.current_match_score)
                         return True
         except Exception as e:
@@ -746,51 +758,40 @@ class MainUI:
         if columns and columns[0].lower() in ("id", "index", "#0"):
             columns = columns[1:]
 
-        headers = ['Takımlar', 'İlk Yarı Skoru | Mac Sonucu Skoru']
-        data_rows = []
-        team_name = self.current_team_names
-        match_score = self.current_match_score
+        final_headers = ['Takımlar', 'İlk Yarı Skoru', 'Mac Sonucu Skoru']
+        for h in self.headers_config:
+            for option in h["options"]:
+                final_headers.append(f"{h['header']} ~ {option}")
+                
+        row_data = ["-", "-"] + ["-"] * (len(final_headers) - 2)
+        row_data[0] = self.current_team_names
+        row_data[1] = self.scores[1]
+        row_data[2] = self.scores[0]
 
-        count = 0
         for item_id in self.tree.get_children():
-            count += 1
             row = self.tree.item(item_id)['values']
-            if row:
-                header = row[1]
-                odds = row[2]
-                odds_list = re.findall(r'\(([^,]+),\s*([^\)]+)\)', odds)
-                row_headers = [f"{header} ~ {option.strip()}" for option, _ in odds_list]
-                headers.extend(row_headers)
-                if count == 1:
-                    row_data = [team_name, match_score] + [value.strip() for _, value in odds_list]
-                else:
-                    row_data = [value.strip() for _, value in odds_list]
-                data_rows.append(row_data)
-
-        flattened_data = [value for sublist in data_rows for value in sublist]
-        
-        def sort_key(header):
-            for i, pred_header in enumerate(self.headers):
-                if pred_header in header:
-                    return i
-            return len(self.headers)
-        
-        initial_headers = headers[:2]
-        sortable_headers = headers[2:]
-        sorted_indices = sorted(range(len(sortable_headers)), key=lambda i: sort_key(sortable_headers[i]))
-        
-        final_headers = initial_headers + [sortable_headers[i] for i in sorted_indices]
-        final_data = [flattened_data[0], flattened_data[1]] + [flattened_data[i+2] for i in sorted_indices]
+            if not row:
+                continue
+            header = row[1]
+            odds = row[2]
+            odds_list = re.findall(r'\(([^,]+),\s*([^\)]+)\)', odds)
+            for option, value in odds_list:
+                key = f"{header} ~ {option.strip()}"
+                if key in final_headers:
+                    idx = final_headers.index(key)
+                    row_data[idx] = value.strip()
 
         filename = self.current_team_names + "_" + self.date_time.get()
         safe_name_excel = re.sub(r'[\\/:"*?<>|]+', '_', filename) + ".xlsx"
         wb = openpyxl.Workbook()
         sheet = wb.active
         sheet.title = "Exported Data"
+
         for col_num, header in enumerate(final_headers, start=1):
             sheet.cell(row=1, column=col_num, value=header)
-        for col_num, value in enumerate(final_data, start=1):
+        for col_num, value in enumerate(row_data, start=1):
             sheet.cell(row=2, column=col_num, value=value)
+
         wb.save(safe_name_excel)
         messagebox.showinfo("Export", f"Data has been exported to Excel file: {safe_name_excel}")
         
@@ -1304,7 +1305,7 @@ class MainUI:
             if num_blocks == 1: # large block
                 block = blocks[0]
                 bx, by, bw, bh = block['coordinates']
-                h_text = "Unknown"
+                h_text = "İlk Yarı / Maç Skoru"
                 if num_headers >= 1: 
                     header = headers[num_headers - 1]
                     hy = header['coordinates'][1]
